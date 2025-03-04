@@ -1,7 +1,8 @@
 import os
 import random
+import cv2
 from typing import Optional
-import pytorch_lightning as pl
+import lightning as pl
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets import VOCSegmentation
@@ -15,21 +16,11 @@ import numpy as np
 #   Helper: Albumentations wrapper
 # -------------------------------- #
 def alb_transform_wrapper(alb_transform):
-    """
-    Returns a function that:
-      1) Converts PIL images/masks to NumPy arrays,
-      2) Runs them through an Albumentations transform,
-      3) Returns the (image, mask) as tensors.
-    """
     def _transform_fn(pil_img, pil_mask):
-        # Convert PIL -> NumPy
-        np_img = np.array(pil_img)
+        np_img = np.array(pil_img, dtype=np.float32) / 255.0  # cast to float, rescale [0,1]
         np_mask = np.array(pil_mask)
-        # Run Albumentations
         augmented = alb_transform(image=np_img, mask=np_mask)
-        # Extract results
-        aug_img, aug_mask = augmented["image"], augmented["mask"]
-        return aug_img, aug_mask
+        return augmented["image"], augmented["mask"]
     return _transform_fn
 
 
@@ -195,7 +186,7 @@ class VOCDataModule(pl.LightningDataModule):
         return DataLoader(
             self._train_dataset,
             batch_size=self.batch_size,
-            shuffle=True,  # as in old code
+            shuffle=True,
             num_workers=self.num_workers,
             pin_memory=True
         )
@@ -217,10 +208,3 @@ class VOCDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=True
         )
-
-    def predict_dataloader(self):
-        """
-        Optional, if you had a predict_dataloader in the old code (like 'disp_loader').
-        If you don't need it, you can omit this method.
-        """
-        return self.test_dataloader()

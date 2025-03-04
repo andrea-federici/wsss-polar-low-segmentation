@@ -10,13 +10,11 @@ dependencies:
   - pytorch-cuda>=12.1        # remove for cpu installation
   - torchinfo
   - lightning
-  - matplotlib
   - torchvision
   - numba
   - scikit-learn
   - albumentations
   - scikit-image
-  - monai
   - pip
   - pip:
       - neptune
@@ -27,3 +25,4 @@ dependencies:
       - omegaconf
       - rasterio
       - transformers
+      - monai

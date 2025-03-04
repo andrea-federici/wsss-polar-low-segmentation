@@ -32,6 +32,10 @@ def loss_getter(name: str = None,
         # alpha: weight of FP -- beta: weight of FN
         loss = TverskyLoss(softmax=True, reduction='mean', to_onehot_y=True, alpha=0.3, beta=0.7)
         return lambda x, y: loss(x, y.unsqueeze(1))
+    
+    elif name=='dice_ce_multiclass':
+        return lambda x, y: dice_ce_loss_multiclass(x, y, class_weights=None, 
+                                                    ignore_index=255, dice_w=dice_w)
     else:
         raise NotImplementedError(f"Loss {name} not implemented")
 
@@ -94,3 +98,82 @@ class DiceCELoss_wrap(DiceCELoss):
         total_loss: torch.Tensor = self.lambda_dice * dice_loss + self.lambda_ce * ce_loss
 
         return total_loss
+    
+
+def dice_ce_loss_multiclass(
+    predictions: torch.Tensor,
+    ground_truths: torch.Tensor,
+    class_weights: torch.Tensor = None,
+    dice_w: float = 0.5,
+    ignore_index: int = 255,
+    smooth: float = 1e-5,
+    squared_pred: bool = False
+):
+    """
+    A multi-class version of dice + cross-entropy loss.
+
+    Args:
+        predictions: shape [B, C, H, W]
+        ground_truths: shape [B, H, W], values in [0..C-1] or possibly 255 for 'void' pixels
+        class_weights: length=C weight vector for cross_entropy, or None
+        dice_w: how much dice contributes to final loss (0.0 -> pure CE, 1.0 -> pure Dice)
+        ignore_index: label to ignore in CrossEntropy (255 in VOC)
+        smooth: smoothing constant for dice
+        squared_pred: if True, use squared probabilities in the denominator
+                      (slightly changes dice gradient)
+    Returns:
+        A scalar tensor representing the combined dice+CE loss.
+    """
+
+    # (1) Cross-entropy loss for multi-class.
+    #     ignore_index=255 means the 'void' labeled pixels in VOC won't affect CE
+    CE_loss = F.cross_entropy(
+        predictions, 
+        ground_truths, 
+        weight=class_weights,      # e.g. shape = [C], if you have class weighting
+        ignore_index=ignore_index  # skip “void” label if your dataset uses 255
+    )
+
+    # If we do not want a dice component, just return CE.
+    if dice_w <= 0:
+        return CE_loss
+
+    # (2) Dice loss for multi-class
+    #     We must ignore 'void' pixels in the dice portion too if we want consistent metrics.
+    #     The simplest approach is to create a mask for valid pixels:
+    valid_mask = None
+    if ignore_index is not None:
+        valid_mask = ground_truths != ignore_index
+        # Replace 'void' with 0 just so one_hot won't exceed index range
+        ground_truths = torch.where(valid_mask, ground_truths, torch.zeros_like(ground_truths))
+
+    B, C, H, W = predictions.shape
+
+    # One-hot encode the ground-truth to [B, C, H, W]
+    # e.g. if ground_truths in [0..C-1], then:
+    gt_onehot = F.one_hot(ground_truths, num_classes=C)  # [B, H, W, C]
+    gt_onehot = gt_onehot.permute(0, 3, 1, 2).float()    # -> [B, C, H, W]
+
+    # Probability map via softmax across channels
+    pred_probs = F.softmax(predictions, dim=1)  # shape [B, C, H, W]
+
+    # If ignoring void, zero out predictions where mask is invalid
+    if valid_mask is not None:
+        valid_mask = valid_mask.unsqueeze(1)  # shape [B, 1, H, W]
+        pred_probs = pred_probs * valid_mask
+        gt_onehot = gt_onehot * valid_mask
+
+    # Intersection = sum(pred * gt), Denominator = sum(pred) + sum(gt)
+    intersection = torch.sum(pred_probs * gt_onehot, dim=(2, 3))  # [B, C]
+    if squared_pred:
+        pred_sum = torch.sum(pred_probs**2, dim=(2, 3))
+        gt_sum   = torch.sum(gt_onehot**2,  dim=(2, 3))
+    else:
+        pred_sum = torch.sum(pred_probs, dim=(2, 3))
+        gt_sum   = torch.sum(gt_onehot, dim=(2, 3))
+
+    dice_per_class = (2.0 * intersection + smooth) / (pred_sum + gt_sum + smooth)
+    dice_loss = 1.0 - dice_per_class.mean()  # average over batch & classes
+
+    # Combine
+    return dice_w * dice_loss + (1.0 - dice_w) * CE_loss

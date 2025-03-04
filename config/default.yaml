@@ -1,11 +1,11 @@
 defaults:
   - _self_
   - logger: neptune
-  - dataset: skred_v1
+  - dataset: voc
   - model: smp
   - optimizer: adamW
   - lr_scheduler: cosine
-  - loss: dice_ce
+  - loss: dice_ce_multi
 
 #### Log and sweep params 
 hydra:

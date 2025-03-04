@@ -9,12 +9,13 @@ import hydra
 sys.path.append('../')
 from neptune.utils import stringify_unsupported
 
-from source import models, data, utils 
+from source import models, data, utils
+from source.pl_modules.ligthning_model_voc import Segmentation
 
 utils.misc.register_resolvers()
 utils.misc.reduce_precision()
 
-@hydra.main(version_base=None, config_path="../config", config_name="default")
+@hydra.main(version_base=None, config_path="config", config_name="default")
 def run(cfg : DictConfig) -> float:
 
     print(OmegaConf.to_yaml(cfg, resolve=True))
@@ -22,9 +23,10 @@ def run(cfg : DictConfig) -> float:
     # Data module:
 
     data_module = data.data_loaders.VOCDataModule(
-        data_dir="/data",
+        data_dir="data",
         batch_size=cfg.batch_size,
-        patch_size=cfg.dataset.width,
+        height=cfg.dataset.height,
+        width=cfg.dataset.width,
         num_workers=cfg.workers,
     )
 
@@ -41,16 +43,17 @@ def run(cfg : DictConfig) -> float:
     else:
         scheduler_class = scheduler_kwargs = None
 
-    # Lightning module: 
-    seg = models.ligthning_model.Segmentation(model=model, 
-                                              loss_fn=loss_fn,
-                                              optim_class=getattr(torch.optim, cfg.optimizer.name),
-                                              optim_kwargs=dict(cfg.optimizer.hparams),
-                                              scheduler_class=scheduler_class,
-                                              scheduler_kwargs=scheduler_kwargs,
-                                              log_lr=cfg.log_lr,
-                                              log_grad_norm=cfg.log_grad_norm,
-                                              plot_dict=dict(cfg.plot_preds_at_epoch))
+    # Lightning module (for VOC dataset)
+    seg = Segmentation(
+        model=model, 
+        loss_fn=loss_fn,
+        optim_class=getattr(torch.optim, cfg.optimizer.name),
+        optim_kwargs=dict(cfg.optimizer.hparams),
+        scheduler_class=scheduler_class,
+        scheduler_kwargs=scheduler_kwargs,
+        log_lr=cfg.log_lr,
+        log_grad_norm=cfg.log_grad_norm,
+        plot_dict=dict(cfg.plot_preds_at_epoch))
 
     # Logger: 
     if cfg.logger.backend=='tensorboard':
@@ -87,14 +90,10 @@ def run(cfg : DictConfig) -> float:
         cb.append(checkpoint_callback)
 
     # Training: 
-    devices = utils.misc.find_devices(1)
-    if len(devices) == 1: 
-        devices = devices[0]
-
     trainer = lightning.Trainer(
         logger=logger, 
         callbacks=cb, 
-        devices=devices, #utils.misc.find_devices(1), # Num of GPUs available
+        devices=utils.misc.find_devices(1),
         max_epochs=cfg.epochs, 
         limit_train_batches=cfg.limit_train_batches,
         limit_val_batches=cfg.limit_val_batches,
@@ -102,7 +101,7 @@ def run(cfg : DictConfig) -> float:
         accelerator='gpu',
         overfit_batches=0.0, # >0 for debug
     )
-    trainer.fit(seg, data_module)
+    trainer.fit(seg, datamodule=data_module)
 
     logger.finalize('success')
 
