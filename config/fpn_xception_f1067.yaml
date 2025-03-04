@@ -1,0 +1,23 @@
+defaults:
+  - default
+  - override lr_scheduler: redplat
+
+dataset:
+  channels: [0, 1, 2, 3, 6, 7, 8]
+
+loss:
+  name: dice_ce
+  hparams:
+    pos_weight: 2.5
+    dice_w: 0.0
+
+optimizer:
+  name: Adam
+  hparams:
+    lr: 1e-4
+
+epochs: 300
+batch_size: 16
+checkpoints: True
+
+run_tags: ['fpn-xception-f1067']

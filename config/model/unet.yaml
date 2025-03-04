@@ -1,0 +1,7 @@
+# @package _global_
+
+model:
+  name: unet
+  hparams:
+    dim: 16
+    dim_mults: [1, 2, 4, 8]

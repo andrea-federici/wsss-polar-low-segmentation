@@ -1,0 +1,8 @@
+# @package _global_
+
+loss:
+  name: dice_ce
+  hparams:
+    pos_weight: 3.0
+    dice_w: 0.1
+    squared_pred: False

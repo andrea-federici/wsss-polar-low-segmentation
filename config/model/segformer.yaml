@@ -1,0 +1,6 @@
+# @package _global_
+
+model:
+  name: segformer
+  hparams:
+    pretrained: nvidia/segformer-b3-finetuned-ade-512-512

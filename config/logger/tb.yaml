@@ -1,0 +1,2 @@
+backend: tensorboard
+logdir: ${hydra:runtime.output_dir}

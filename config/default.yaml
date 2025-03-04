@@ -1,0 +1,44 @@
+defaults:
+  - _self_
+  - logger: neptune
+  - dataset: skred_v1
+  - model: smp
+  - optimizer: adamW
+  - lr_scheduler: cosine
+  - loss: dice_ce
+
+#### Log and sweep params 
+hydra:
+  run:
+    dir: logs/${dataset.name}/${model.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: logs/${now:%Y-%m-%d-%H-%M-%S}
+    subdir: ${dataset.name}/${model.name}/${hydra.job.num}
+
+#### Experiment params 
+tags: ${cat:${default_tags},${run_tags}}
+
+default_tags:
+  - ${model.name}
+  - ${dataset.name}
+
+run_tags: ['']
+
+workers: 16
+log_grad_norm: False
+log_lr: True
+
+plot_preds_at_epoch:
+  set: ["val"]
+  batch: 2
+  samples: 8
+  every: 20
+
+#### Training params
+batch_size: 32
+epochs: 150
+patience: 30
+limit_train_batches: null
+limit_val_batches: null
+clip_val: 5.0
+checkpoints: False   # save checkpoints while training

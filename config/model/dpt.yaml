@@ -1,0 +1,9 @@
+# @package _global_
+
+model:
+  name: dpt
+  hparams:
+    pretrained: 'Intel/dpt-large-ade'
+    fusion_hidden_size: 64    # used only if pretrained is null
+    hidden_size: 240          # used only if pretrained is null
+    intermediate_size: 1024   # used only if pretrained is null

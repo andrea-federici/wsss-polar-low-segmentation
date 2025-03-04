@@ -1,0 +1,8 @@
+# @package _global_
+
+model:
+  name: smp
+  hparams:
+    arch: fpn #deeplabv3plus
+    encoder: resnet18 #tu-xception41
+    encoder_weights: imagenet # ssl swsl

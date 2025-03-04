@@ -1,0 +1,25 @@
+name: pl_seg
+channels:
+  - pytorch
+  - nvidia                    # remove for cpu installation
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.9
+  - pytorch>=2.1
+  - pytorch-cuda>=12.1        # remove for cpu installation
+  - torchinfo
+  - lightning
+  - matplotlib
+  - torchvision
+  - numba
+  - scikit-learn
+  - pip
+  - pip:
+      - neptune
+      - einops
+      - hydra-core
+      - hydra-optuna-sweeper
+      - hydra-joblib-launcher
+      - omegaconf
+      - rasterio
