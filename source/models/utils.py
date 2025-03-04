@@ -1,5 +1,5 @@
 from torchinfo import summary
-from saravaseg import models
+from source import models
 
 def model_getter(model_name, cfg, print_summary=True):
 

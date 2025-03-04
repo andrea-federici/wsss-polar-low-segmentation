@@ -6,7 +6,7 @@ import lightning
 from lightning.pytorch.loggers.tensorboard import TensorBoardLogger
 from pytorch_lightning.loggers import NeptuneLogger
 from lightning.pytorch.utilities import grad_norm
-from saravaseg import utils
+from source import utils
 
 class Segmentation(lightning.LightningModule):
 

@@ -1,7 +1,7 @@
 # polar-low-segmentation
 Segmentation of Polar Lows from masks generated with XAI techniques
 
-The list of implemented models is available [here](/saravaseg/models/README.md)
+The list of implemented models is available [here](/saravaseg/models/models.md)
 
 ## Hydra usage examples
 

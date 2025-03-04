@@ -8,7 +8,8 @@ from omegaconf import DictConfig, OmegaConf
 import hydra
 sys.path.append('../')
 from neptune.utils import stringify_unsupported
-import models, data, utils 
+
+from source import models, data, utils 
 
 utils.misc.register_resolvers()
 utils.misc.reduce_precision()
@@ -19,17 +20,12 @@ def run(cfg : DictConfig) -> float:
     print(OmegaConf.to_yaml(cfg, resolve=True))
     
     # Data module:
-    cache_dir = os.path.join(data.avalanche_database.CACHE_DIR)
-    print(f'Caching training data to:\n  {cache_dir}')
-    data_module = data.avalanche_database.AvalancheDataModule(
-        cache_dir=cache_dir, 
-        channels=cfg.dataset.channels, 
-        batch_size=cfg.batch_size, 
-        width=cfg.dataset.width, 
-        height=cfg.dataset.height, 
-        recache=False,
-        augment=cfg.dataset.augment,
-        num_workers=cfg.workers
+
+    data_module = data.data_loaders.VOCDataModule(
+        data_dir="/data",
+        batch_size=cfg.batch_size,
+        patch_size=cfg.dataset.width,
+        num_workers=cfg.workers,
     )
 
     # Model

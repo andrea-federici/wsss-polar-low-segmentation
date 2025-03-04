@@ -14,6 +14,9 @@ dependencies:
   - torchvision
   - numba
   - scikit-learn
+  - albumentations
+  - scikit-image
+  - monai
   - pip
   - pip:
       - neptune
@@ -23,3 +26,4 @@ dependencies:
       - hydra-joblib-launcher
       - omegaconf
       - rasterio
+      - transformers

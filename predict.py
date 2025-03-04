@@ -10,9 +10,9 @@ from omegaconf import DictConfig, OmegaConf
 import hydra
 sys.path.append('../')
 from neptune.utils import stringify_unsupported
-import models, data, utils 
+from source import models, data, utils 
 
-from gdar.torch import segmentation
+# from gdar.torch import segmentation
 
 
 utils.misc.register_resolvers()
@@ -59,8 +59,8 @@ def run(checkpoint_path):
         
         
         # Data module:
-        cache_dir = os.path.join(data.avalanche_database.CACHE_DIR)
-        data_module = data.avalanche_database.AvalancheDataModule(
+        cache_dir = os.path.join(data.data_loaders.CACHE_DIR)
+        data_module = data.data_loaders.AvalancheDataModule(
             cache_dir=cache_dir, 
             channels=cfg.dataset.channels, 
             batch_size=cfg.batch_size, 
