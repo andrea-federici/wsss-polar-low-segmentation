@@ -17,7 +17,7 @@ import numpy as np
 # -------------------------------- #
 def alb_transform_wrapper(alb_transform):
     def _transform_fn(pil_img, pil_mask):
-        np_img = np.array(pil_img, dtype=np.float32) / 255.0  # cast to float, rescale [0,1]
+        np_img = np.array(pil_img, dtype=np.float32) / 255.0 
         np_mask = np.array(pil_mask)
         augmented = alb_transform(image=np_img, mask=np_mask)
         return augmented["image"], augmented["mask"]
@@ -111,7 +111,7 @@ class VOCDataModule(pl.LightningDataModule):
         """
         # ----- Albumentations for training (if self.augment=True) -----
         if self.augment:
-            # Mirror of old "get_train_loader(..., augment=True)"
+            
             train_alb_transform = alb.Compose([
                 alb.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.1,
                                      border_mode=cv2.BORDER_CONSTANT, value=0, p=1.0),
@@ -124,7 +124,7 @@ class VOCDataModule(pl.LightningDataModule):
                 ToTensorV2(),
             ])
         else:
-            # Mirror of old "get_train_loader(..., augment=False)"
+            
             train_alb_transform = alb.Compose([
                 alb.PadIfNeeded(min_height=self.height, min_width=self.width,
                                 border_mode=cv2.BORDER_CONSTANT, value=0, p=1.0),
@@ -133,7 +133,6 @@ class VOCDataModule(pl.LightningDataModule):
             ])
 
         # ----- Albumentations for validation -----
-        # Mirror of old "get_valid_loader(...)"
         val_alb_transform = alb.Compose([
             alb.PadIfNeeded(min_height=self.height, min_width=self.width,
                             border_mode=cv2.BORDER_CONSTANT, value=0, p=1.0),
@@ -142,7 +141,6 @@ class VOCDataModule(pl.LightningDataModule):
         ])
 
         # ----- Albumentations for test -----
-        # Mirror of old "get_test_loader(...)"
         test_alb_transform = alb.Compose([
             alb.PadIfNeeded(min_height=self.height, min_width=self.width,
                             border_mode=cv2.BORDER_CONSTANT, value=0, p=1.0),
