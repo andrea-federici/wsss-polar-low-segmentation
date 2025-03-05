@@ -9,6 +9,16 @@ from torch import Tensor
 from typing import (Any, List, Mapping, Optional, Union)
 
 from neptune.types import File
+import logging
+
+class _FilterCallback(logging.Filterer):
+    def filter(self, record: logging.LogRecord):
+        return not (
+                record.name == "neptune"
+                and record.getMessage().startswith(
+            "Error occurred during asynchronous operation processing: X-coordinates (step) must be strictly increasing for series attribute"
+        )
+        )
 
 def save_figure(fig, filename: str, as_html=False, as_pickle=False):
     if filename.endswith('.html'):

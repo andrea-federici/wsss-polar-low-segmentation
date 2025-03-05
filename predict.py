@@ -12,15 +12,14 @@ sys.path.append('../')
 from neptune.utils import stringify_unsupported
 from source import models, data, utils 
 
-# from gdar.torch import segmentation
-
-
 utils.misc.register_resolvers()
 utils.misc.reduce_precision()
 
 
+# TODO: ths script was not updated and will not work as is.
+
 def run(checkpoint_path): 
-    @hydra.main(version_base=None, config_path="../config", config_name="config")
+    @hydra.main(version_base=None, config_path="config", config_name="predict")
     def _run(cfg : DictConfig) -> float:
         
         print(OmegaConf.to_yaml(cfg, resolve=True))
@@ -38,7 +37,7 @@ def run(checkpoint_path):
         else:
             scheduler_class = scheduler_kwargs = None        
         
-        seg = models.ligthning_model.Segmentation.load_from_checkpoint(
+        seg = models.sar_module.Segmentation.load_from_checkpoint(
             checkpoint_path, 
             model=model, 
             loss_fn=loss_fn,
@@ -53,11 +52,7 @@ def run(checkpoint_path):
         
         model = seg.model
         model.eval()
-        
-        
-        #segmentation.predict_
-        
-        
+                
         # Data module:
         cache_dir = os.path.join(data.data_loaders.CACHE_DIR)
         data_module = data.data_loaders.AvalancheDataModule(
@@ -82,14 +77,12 @@ def run(checkpoint_path):
         
     return _run
     
-if __name__ == "__main__":
+# if __name__ == "__main__":
     
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config-path')
-    args, unknown = parser.parse_known_args()
-    checkpoint_path = glob.glob(os.path.abspath(os.path.join(args.config_path, '..', 'checkpoints', '*.ckpt')))[0]
-    print(checkpoint_path)
-    assert os.path.exists(checkpoint_path), f'checkpoint does not exist: {checkpoint_path}'
-    run(checkpoint_path)()
-    
-    
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument('--config-path')
+#     args, unknown = parser.parse_known_args()
+#     checkpoint_path = glob.glob(os.path.abspath(os.path.join(args.config_path, '..', 'checkpoints', '*.ckpt')))[0]
+#     print(checkpoint_path)
+#     assert os.path.exists(checkpoint_path), f'checkpoint does not exist: {checkpoint_path}'
+#     run(checkpoint_path)()

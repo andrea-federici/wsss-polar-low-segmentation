@@ -4,6 +4,6 @@ dataset:
   name: PascalVOC2012
   num_labels: 21
   channels: [0, 1, 2]
-  width: 512
-  height: 512
+  width: 256
+  height: 256
   augment: True

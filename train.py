@@ -2,15 +2,20 @@ import torch
 import lightning
 from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
-import os
 import sys
 from omegaconf import DictConfig, OmegaConf
 import hydra
 sys.path.append('../')
+import neptune
 from neptune.utils import stringify_unsupported
 
 from source import models, data, utils
-from source.pl_modules.ligthning_model_voc import Segmentation
+from source.pl_modules.voc_module import Segmentation
+from source.utils.neptune_utils import _FilterCallback
+
+neptune.internal.operation_processors.async_operation_processor.logger.addFilter(
+    _FilterCallback()
+)
 
 utils.misc.register_resolvers()
 utils.misc.reduce_precision()

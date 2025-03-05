@@ -7,7 +7,7 @@ The list of implemented models is available [here](/saravaseg/models/models.md)
 
 Perform hyperparameters search through multirun:
 ```
-python saravaseg/train.py -m
+python train.py lr_scheduler=cosine,redplat optimizer.hparams.lr=1e-3,5e-3,1e-4 -m
 ```
 
 Use a config different from default:

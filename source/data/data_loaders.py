@@ -1,5 +1,3 @@
-import os
-import random
 import cv2
 from typing import Optional
 import lightning as pl

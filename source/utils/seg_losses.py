@@ -3,6 +3,7 @@ import torch
 from typing import Optional
 from monai.losses import DiceCELoss, DiceFocalLoss, GeneralizedDiceFocalLoss, TverskyLoss
 
+# TODO: at the moment the only loss that works on VOC is dice_ce_multiclass. The other losses should be adapted for the multi-class case
 
 def loss_getter(name: str = None,
                 pos_weight: Optional[float] = 1.0,

@@ -1,4 +1,4 @@
 backend: neptune
-project: NORCE-stuff/skred-avalanche
-offline: True # True to log locally
+project: NORCE-stuff/pl-seg # TODO: Change to your project
+offline: False # True to log locally
 logdir: ${hydra:runtime.output_dir}
