@@ -1,0 +1,12 @@
+defaults:
+  - default
+  - override lr_scheduler: redplat
+
+logger:
+  use_env_token: True
+  project: andreaf/polarlows
+
+checkpoints: True
+
+run_tags: ['voc_smp']
+

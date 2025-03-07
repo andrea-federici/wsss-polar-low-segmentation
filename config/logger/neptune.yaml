@@ -1,4 +1,5 @@
 backend: neptune
+use_env_token: False
 project: NORCE-stuff/pl-seg # TODO: Change to your project
 offline: False # True to log locally
 logdir: ${hydra:runtime.output_dir}

@@ -1,3 +1,5 @@
+import os
+
 import torch
 import lightning
 from lightning.pytorch.loggers import TensorBoardLogger
@@ -8,6 +10,7 @@ import hydra
 sys.path.append('../')
 import neptune
 from neptune.utils import stringify_unsupported
+from dotenv import load_dotenv
 
 from source import models, data, utils
 from source.pl_modules.voc_module import Segmentation
@@ -64,7 +67,15 @@ def run(cfg : DictConfig) -> float:
     if cfg.logger.backend=='tensorboard':
         logger = TensorBoardLogger(cfg.logger.logdir) 
     elif cfg.logger.backend=='neptune':
+        # Check if API token should be loaded from .env
+        if getattr(cfg.logger, 'use_env_token', False):
+            load_dotenv()
+            neptune_api_token = os.getenv('NEPTUNE_API_TOKEN')
+        else:
+            neptune_api_token = None
+        
         logger = utils.neptune_utils.NeptuneLogger(
+            api_key=neptune_api_token,
             project_name=cfg.logger.project,
             save_dir=cfg.logger.logdir,
             tags=cfg.tags,
