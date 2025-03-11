@@ -42,3 +42,9 @@ limit_train_batches: null
 limit_val_batches: null
 clip_val: 5.0
 checkpoints: False   # save checkpoints while training
+
+#### Only for prediction
+checkpoint:
+  base_folder: "checkpoints/"
+  path: "" # Must be specified at runtime. This path is added to the 
+           # base_folder path to load the checkpoint.

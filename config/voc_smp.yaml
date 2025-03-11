@@ -9,4 +9,3 @@ logger:
 checkpoints: True
 
 run_tags: ['voc_smp']
-

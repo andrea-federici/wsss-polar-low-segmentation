@@ -29,7 +29,6 @@ def run(cfg : DictConfig) -> float:
     print(OmegaConf.to_yaml(cfg, resolve=True))
     
     # Data module:
-
     data_module = data.data_loaders.VOCDataModule(
         data_dir="data",
         batch_size=cfg.batch_size,
