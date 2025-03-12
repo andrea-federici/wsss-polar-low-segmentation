@@ -133,8 +133,7 @@ def run(cfg : DictConfig) -> float:
                 average='macro'
             )
 
-            cmap = plt.get_cmap("tab20", np.max(target)+1) # 21 classes
-            print(f"Number of classes used for cmap: {np.max(target)+1}")
+            cmap = plt.get_cmap("tab20", cfg.dataset.num_labels) # 21 classes
 
             for idx in range(preds.shape[0]):
                 plt.figure(figsize=(12, 4))
