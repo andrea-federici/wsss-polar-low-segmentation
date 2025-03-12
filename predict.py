@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import lightning
 from lightning.pytorch.loggers import TensorBoardLogger
@@ -11,13 +12,14 @@ import hydra
 import matplotlib.pyplot as plt
 sys.path.append('../')
 from neptune.utils import stringify_unsupported
+from sklearn.metrics import jaccard_score, accuracy_score
 from source import models, data, utils 
 
 utils.misc.register_resolvers()
 utils.misc.reduce_precision()
 
 
-# TODO: ths script was not updated and will not work as is.
+# TODO: this script was not updated and will not work as is.
 
 @hydra.main(version_base=None, config_path="config", config_name="predict")
 def run(cfg : DictConfig) -> float:
@@ -96,43 +98,75 @@ def run(cfg : DictConfig) -> float:
     #     num_workers=cfg.workers
     # )
     # dl = data_module.predict_dataloader()
+
+    output_dir = "output"
+    os.makedirs(output_dir, exist_ok=True)
     
     with torch.no_grad():
-        for x,y in dl:
-            y_hat = model(x.to('cuda'))
-            # y_hat is of type 
+        for batch_idx, (x, y) in enumerate(dl):
+            x, y = x.to('cuda'), y.to('cuda')
+            y_pred = model(x)
+            # y_pred is of type 
             # transformers.modeling_outputs.SemanticSegmenterOutput and 
-            # y_hat.logits is a torch.Tensor of shape [32, 21, 64, 64]. 
+            # y_pred.logits is a torch.Tensor of shape [32, 21, 64, 64]. 
             # y is a torch.Tensor of shape [32, 256, 256].
-            logits = y_hat.logits
-            predicted_mask = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy()
-            
-            ground_truth_mask = y.squeeze(0).cpu().numpy()
+            logits = y_pred.logits
 
-            for idx in range(32):
+            y = torch.nn.functional.interpolate(
+                y.unsqueeze(1).float(), # interpolate() expects a 4D tensor
+                size=logits.shape[-2:], # resize to same H,W as logits
+                mode='nearest'
+            ).squeeze(1) # remove the added channel dimension
+            loss = loss_fn(logits, y.long())
+
+            preds = torch.argmax(logits, dim=1).int()
+            target = y.int()
+
+            # Ignore void pixels for metrics only
+            mask = target != 255
+            preds_for_metrics = preds[mask].cpu().numpy()
+            target_for_metrics = target[mask].cpu().numpy()
+            
+            mean_iou = jaccard_score(
+                target_for_metrics.flatten(), 
+                preds_for_metrics.flatten(),
+                average='macro'
+            )
+
+            cmap = plt.get_cmap("tab20", np.max(target)+1) # 21 classes
+            print(f"Number of classes used for cmap: {np.max(target)+1}")
+
+            for idx in range(preds.shape[0]):
                 plt.figure(figsize=(12, 4))
 
                 # Plot predicted mask
                 plt.subplot(1, 2, 1)
-                plt.imshow(predicted_mask[idx], cmap="jet")
+                plt.imshow(preds[idx].cpu().numpy(), cmap=cmap)
                 plt.title("Predicted Mask")
                 plt.axis("off")
 
                 # Plot ground truth mask
                 plt.subplot(1, 2, 2)
-                plt.imshow(ground_truth_mask[idx], cmap="jet")
+                plt.imshow(target[idx].cpu().numpy(), cmap=cmap)
                 plt.title("Ground Truth Mask")
                 plt.axis("off")
 
-                plt.savefig(f"segmentation_comparison{idx}.png", dpi=300, bbox_inches="tight")
+                plt.savefig(
+                    os.path.join(
+                        output_dir, 
+                        f"segmentation_comparison_{batch_idx}_{idx}.png"
+                    ),
+                    dpi=300,
+                    bbox_inches='tight'
+                )
+                plt.close()
 
-            plt.close()
+            print(f"Batch {batch_idx}: Loss: {loss.item()}, Mean IoU: "
+                  f"{mean_iou}")
 
-            print(f"y shape: {y.shape}")
-            print(f"y hat logits shape: {y_hat.logits.shape}")
-            print(f"y_hat type: {type(y_hat)}")
-            
-            break # Remember to remove this
+            # print(f"y shape: {y.shape}")
+            # print(f"y_pred logits shape: {y_pred.logits.shape}")
+            # print(f"y_pred type: {type(y_pred)}")
 
 if __name__ == "__main__":
     run()
