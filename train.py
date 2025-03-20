@@ -13,7 +13,7 @@ from neptune.utils import stringify_unsupported
 from dotenv import load_dotenv
 
 from source import models, data, utils
-from source.pl_modules.voc_module import Segmentation
+import source.pl_modules as plm
 from source.utils.neptune_utils import _FilterCallback
 
 neptune.internal.operation_processors.async_operation_processor.logger.addFilter(
@@ -29,13 +29,27 @@ def run(cfg : DictConfig) -> float:
     print(OmegaConf.to_yaml(cfg, resolve=True))
     
     # Data module:
-    data_module = data.data_loaders.VOCDataModule(
-        data_dir="data",
-        batch_size=cfg.batch_size,
-        height=cfg.dataset.height,
-        width=cfg.dataset.width,
-        num_workers=cfg.workers,
-    )
+    if cfg.dataset.name == 'PascalVOC2012':        
+        data_module = data.data_loaders.VOCDataModule(
+            data_dir="data",
+            batch_size=cfg.batch_size,
+            height=cfg.dataset.height,
+            width=cfg.dataset.width,
+            augment=cfg.dataset.augment,
+            num_workers=cfg.workers,
+        )
+    elif cfg.dataset.name == 'polar_lows':
+        data_module = data.pl_loader.PLDataModule(
+            image_dir=cfg.dataset.image_dir,
+            mask_dir=cfg.dataset.mask_dir,
+            batch_size=cfg.batch_size,
+            height=cfg.dataset.height,
+            width=cfg.dataset.width,
+            augment=cfg.dataset.augment,
+            num_workers=cfg.workers,
+        )
+    else:
+        raise NotImplementedError("Dataset not implemented")
 
     # Model
     model = models.utils.model_getter(cfg.model.name, cfg, print_summary=False)
@@ -51,16 +65,29 @@ def run(cfg : DictConfig) -> float:
         scheduler_class = scheduler_kwargs = None
 
     # Lightning module (for VOC dataset)
-    seg = Segmentation(
-        model=model, 
-        loss_fn=loss_fn,
-        optim_class=getattr(torch.optim, cfg.optimizer.name),
-        optim_kwargs=dict(cfg.optimizer.hparams),
-        scheduler_class=scheduler_class,
-        scheduler_kwargs=scheduler_kwargs,
-        log_lr=cfg.log_lr,
-        log_grad_norm=cfg.log_grad_norm,
-        plot_dict=dict(cfg.plot_preds_at_epoch))
+    if cfg.dataset.name == 'PascalVOC2012':
+        seg = plm.voc_module.Segmentation(
+            model=model, 
+            loss_fn=loss_fn,
+            optim_class=getattr(torch.optim, cfg.optimizer.name),
+            optim_kwargs=dict(cfg.optimizer.hparams),
+            scheduler_class=scheduler_class,
+            scheduler_kwargs=scheduler_kwargs,
+            log_lr=cfg.log_lr,
+            log_grad_norm=cfg.log_grad_norm,
+            plot_dict=dict(cfg.plot_preds_at_epoch))
+    elif cfg.dataset.name == 'polar_lows':
+        seg = plm.sar_module.Segmentation(
+            model=model, 
+            loss_fn=loss_fn,
+            optim_class=getattr(torch.optim, cfg.optimizer.name),
+            optim_kwargs=dict(cfg.optimizer.hparams),
+            scheduler_class=scheduler_class,
+            scheduler_kwargs=scheduler_kwargs,
+            log_lr=cfg.log_lr,
+            log_grad_norm=cfg.log_grad_norm,
+            plot_dict=dict(cfg.plot_preds_at_epoch))
+        
 
     # Logger: 
     if cfg.logger.backend=='tensorboard':

@@ -112,6 +112,8 @@ def run(cfg : DictConfig) -> float:
             # y is a torch.Tensor of shape [32, 256, 256].
             logits = y_pred.logits
 
+            # TODO: not all upsamplers require interpolation. Look at the 
+            # training step to see which need it.
             y = torch.nn.functional.interpolate(
                 y.unsqueeze(1).float(), # interpolate() expects a 4D tensor
                 size=logits.shape[-2:], # resize to same H,W as logits
@@ -132,7 +134,8 @@ def run(cfg : DictConfig) -> float:
                 preds_for_metrics.flatten(),
                 average='macro'
             )
-
+            
+            # TODO: use color map from misc.img_logging
             cmap = plt.get_cmap("tab20", cfg.dataset.num_labels) # 21 classes
 
             for idx in range(preds.shape[0]):

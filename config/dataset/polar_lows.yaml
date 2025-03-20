@@ -1,0 +1,10 @@
+
+# @package _global_
+
+dataset:
+  name: polar-lows
+  num_labels: 2
+  channels: [0, 1, 2]
+  width: 500
+  height: 500
+  augment: True

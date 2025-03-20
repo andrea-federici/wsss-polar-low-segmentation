@@ -206,7 +206,7 @@ class NeptuneLogger(LightningNeptuneLogger):
         Log an image represented as a torch Tensor or a Numpy Array
         """
         path, name = self._artifact_storage_path(name, extension='.png')
-        if tensor.is_cuda:
+        if isinstance(tensor, Tensor) and tensor.is_cuda:
             tensor = tensor.cpu()
         File.as_image(tensor)._save(path)
         self.log_artifact(path, artifact_name=name, delete_after=True)
