@@ -1,33 +1,34 @@
-import numpy as np
 import torch
-import lightning
-from lightning.pytorch.loggers import TensorBoardLogger
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 import os
 import sys
-import glob
-import argparse
 from omegaconf import DictConfig, OmegaConf
 import hydra
 import matplotlib.pyplot as plt
 import cv2
 
 sys.path.append("../")
-from neptune.utils import stringify_unsupported
-from sklearn.metrics import jaccard_score, accuracy_score
+from sklearn.metrics import jaccard_score
 from source import models, data, utils
 
 utils.misc.register_resolvers()
 utils.misc.reduce_precision()
 
 
-# TODO: this script was not updated and will not work as is.
-
-
 @hydra.main(version_base=None, config_path="config", config_name="predict")
 def run(cfg: DictConfig) -> float:
 
     print(OmegaConf.to_yaml(cfg, resolve=True))
+
+    # Ensure that the dataset specified is supported
+    if cfg.dataset.name not in [
+        utils.constants.VOC_DATASET_NAME,
+        utils.constants.PL_DATASET_NAME,
+    ]:
+        raise ValueError(
+            f"Dataset {cfg.dataset.name} is not supported. "
+            f"Supported datasets: {utils.constants.VOC_DATASET_NAME}, "
+            f"{utils.constants.PL_DATASET_NAME}"
+        )
 
     # Ensure that the checkpoint path was specified
     if not cfg.checkpoint.path:
@@ -75,7 +76,7 @@ def run(cfg: DictConfig) -> float:
     model.eval()
 
     # Data module:
-    if cfg.dataset.name == "PascalVOC2012":
+    if cfg.dataset.name == utils.constants.VOC_DATASET_NAME:
         data_module = data.data_loaders.VOCDataModule(
             data_dir="data",
             batch_size=cfg.batch_size,
@@ -83,7 +84,7 @@ def run(cfg: DictConfig) -> float:
             width=cfg.dataset.width,
             num_workers=cfg.workers,
         )
-    elif cfg.dataset.name == "polar-lows":
+    elif cfg.dataset.name == utils.constants.PL_DATASET_NAME:
         data_module = data.pl_loader.PLDataModule(
             image_dir=cfg.dataset.image_dir,
             mask_dir=cfg.dataset.mask_dir,

@@ -1,0 +1,2 @@
+VOC_DATASET_NAME = "PascalVOC2012"
+PL_DATASET_NAME = "polar-lows"

@@ -30,8 +30,19 @@ def run(cfg: DictConfig) -> float:
 
     print(OmegaConf.to_yaml(cfg, resolve=True))
 
+    # Ensure that the dataset specified is supported
+    if cfg.dataset.name not in [
+        utils.constants.VOC_DATASET_NAME,
+        utils.constants.PL_DATASET_NAME,
+    ]:
+        raise ValueError(
+            f"Dataset {cfg.dataset.name} is not supported. "
+            f"Supported datasets: {utils.constants.VOC_DATASET_NAME}, "
+            f"{utils.constants.PL_DATASET_NAME}"
+        )
+
     # Data module:
-    if cfg.dataset.name == "PascalVOC2012":
+    if cfg.dataset.name == utils.constants.VOC_DATASET_NAME:
         data_module = data.data_loaders.VOCDataModule(
             data_dir="data",
             batch_size=cfg.batch_size,
@@ -40,8 +51,7 @@ def run(cfg: DictConfig) -> float:
             augment=cfg.dataset.augment,
             num_workers=cfg.workers,
         )
-    elif cfg.dataset.name == "polar-lows":
-        print("Using polar lows dataset")
+    elif cfg.dataset.name == utils.constants.PL_DATASET_NAME:
         data_module = data.pl_loader.PLDataModule(
             image_dir=cfg.dataset.image_dir,
             mask_dir=cfg.dataset.mask_dir,
@@ -51,8 +61,6 @@ def run(cfg: DictConfig) -> float:
             augment=cfg.dataset.augment,
             num_workers=cfg.workers,
         )
-    else:
-        raise NotImplementedError("Dataset not implemented")
 
     # Model
     model = models.utils.model_getter(cfg.model.name, cfg, print_summary=False)
@@ -68,7 +76,7 @@ def run(cfg: DictConfig) -> float:
         scheduler_class = scheduler_kwargs = None
 
     # Lightning module (for VOC dataset)
-    if cfg.dataset.name == "PascalVOC2012":
+    if cfg.dataset.name == utils.constants.VOC_DATASET_NAME:
         seg = plm.voc_module.Segmentation(
             model=model,
             loss_fn=loss_fn,
@@ -80,7 +88,7 @@ def run(cfg: DictConfig) -> float:
             log_grad_norm=cfg.log_grad_norm,
             plot_dict=dict(cfg.plot_preds_at_epoch),
         )
-    elif cfg.dataset.name == "polar-lows":
+    elif cfg.dataset.name == utils.constants.PL_DATASET_NAME:
         seg = plm.sar_module.Segmentation(
             model=model,
             loss_fn=loss_fn,
