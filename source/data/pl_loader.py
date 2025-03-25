@@ -10,7 +10,7 @@ import lightning as pl
 import albumentations as alb
 from albumentations.pytorch import ToTensorV2
 
-from data_loaders import alb_transform_wrapper
+from source.data.data_loaders import alb_transform_wrapper
 
 
 # -------------------------------- #
@@ -20,24 +20,44 @@ class PLDatasetWrapper(Dataset):
     def __init__(self, image_dir, mask_dir, transform=None):
         self.image_dir = image_dir
         self.mask_dir = mask_dir
-        self.transform = transform  # This should be a function(img, mask) -> (img, mask)
+        self.transform = (
+            transform  # This should be a function(img, mask) -> (img, mask)
+        )
         self.images = sorted(os.listdir(image_dir))
-    
+
     def __len__(self):
         return len(self.images)
-    
+
     def __getitem__(self, idx):
         img_path = os.path.join(self.image_dir, self.images[idx])
-        mask_path = os.path.join(
-            self.mask_dir, self.images[idx].replace('.jpg', '.png')
-        )
+        print(f"img_path: {img_path}")
+        mask_path = (
+            os.path.join(self.mask_dir, self.images[idx].replace(".jpg", ".png"))
+            + ".png"
+        )  # TODO: remove the .png at the end once the file naming is fixed
+
+        print(f"mask_path: {mask_path}")
 
         image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
 
+        # Ensure mask is resized to match image
+        mask = cv2.resize(
+            mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST
+        )
+
+        # Convert 255 to 1 for binary segmentation
+        mask[mask == 255] = 1
+
         if self.transform is not None:
+            print(
+                f"Before transformation -> Image shape: {image.shape}, Mask shape: {mask.shape}"
+            )
             image, mask = self.transform(image, mask)
+            print(
+                f"After transformation -> Image shape: {image.shape}, Mask shape: {mask.shape}"
+            )
         else:
             image = TF.to_tensor(image, dtype=torch.long)
             mask = torch.tensor(mask, dtype=torch.long)
@@ -50,17 +70,17 @@ class PLDatasetWrapper(Dataset):
 # -------------------------------- #
 class PLDataModule(pl.LightningDataModule):
     def __init__(
-        self, 
-        image_dir, 
-        mask_dir, 
-        batch_size=8, 
+        self,
+        image_dir,
+        mask_dir,
+        batch_size=8,
         val_split=0.2,
         height: int = 512,
         width: int = 512,
         augment: bool = True,
         num_workers: int = 2,
         *args,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.image_dir = image_dir
@@ -74,49 +94,76 @@ class PLDataModule(pl.LightningDataModule):
 
         self._train_dataset = None
         self._val_dataset = None
-    
+
     def setup(self, stage: str = None):
         # ----- Albumentations for training (if self.augment=True) -----
         if self.augment:
-            train_alb_transform = alb.Compose([
-                alb.ShiftScaleRotate(shift_limit=0.2, scale_limit=0.1,
-                                     border_mode=cv2.BORDER_CONSTANT, value=0, p=1.0),
-                alb.HorizontalFlip(p=0.5),
-                alb.VerticalFlip(p=0.5),
-                alb.RandomRotate90(p=0.5),
-                alb.PadIfNeeded(min_height=self.height, min_width=self.width,
-                                border_mode=cv2.BORDER_CONSTANT, value=0, p=1.0),
-                alb.RandomCrop(self.height, self.width, p=1.0),
-                ToTensorV2(),
-            ])
+            train_alb_transform = alb.Compose(
+                [
+                    alb.Resize(self.height, self.width, p=1.0),
+                    alb.ShiftScaleRotate(
+                        shift_limit=0.2,
+                        scale_limit=0.1,
+                        border_mode=cv2.BORDER_CONSTANT,
+                        value=0,
+                        p=1.0,
+                    ),
+                    alb.HorizontalFlip(p=0.5),
+                    alb.VerticalFlip(p=0.5),
+                    alb.RandomRotate90(p=0.5),
+                    alb.PadIfNeeded(
+                        min_height=self.height,
+                        min_width=self.width,
+                        border_mode=cv2.BORDER_CONSTANT,
+                        value=0,
+                        p=1.0,
+                    ),
+                    alb.RandomCrop(self.height, self.width, p=1.0),
+                    ToTensorV2(),
+                ]
+            )
         else:
-            train_alb_transform = alb.Compose([
-                alb.PadIfNeeded(min_height=self.height, min_width=self.width,
-                                border_mode=cv2.BORDER_CONSTANT, value=0, p=1.0),
-                alb.CenterCrop(self.height, self.width, p=1.0),
-                ToTensorV2(),
-            ])
+            train_alb_transform = alb.Compose(
+                [
+                    alb.Resize(self.height, self.width, p=1.0),
+                    alb.PadIfNeeded(
+                        min_height=self.height,
+                        min_width=self.width,
+                        border_mode=cv2.BORDER_CONSTANT,
+                        value=0,
+                        p=1.0,
+                    ),
+                    alb.CenterCrop(self.height, self.width, p=1.0),
+                    ToTensorV2(),
+                ]
+            )
 
         # ----- Albumentations for validation -----
-        val_alb_transform = alb.Compose([
-            alb.PadIfNeeded(min_height=self.height, min_width=self.width,
-                            border_mode=cv2.BORDER_CONSTANT, value=0, p=1.0),
-            alb.CenterCrop(self.height, self.width, p=1.0),
-            ToTensorV2(),
-        ])
+        val_alb_transform = alb.Compose(
+            [
+                alb.Resize(self.height, self.width, p=1.0),
+                alb.PadIfNeeded(
+                    min_height=self.height,
+                    min_width=self.width,
+                    border_mode=cv2.BORDER_CONSTANT,
+                    value=0,
+                    p=1.0,
+                ),
+                alb.CenterCrop(self.height, self.width, p=1.0),
+                ToTensorV2(),
+            ]
+        )
 
         # Convert these Albumentations pipelines into functions
         train_transform_fn = alb_transform_wrapper(train_alb_transform)
-        val_transform_fn   = alb_transform_wrapper(val_alb_transform)
+        val_transform_fn = alb_transform_wrapper(val_alb_transform)
 
         train_dataset = PLDatasetWrapper(
             self.image_dir, self.mask_dir, transform=train_transform_fn
         )
-        
+
         train_indices, val_indices = train_test_split(
-            list(range(len(train_dataset))),
-            test_size=self.val_split,
-            random_state=42
+            list(range(len(train_dataset))), test_size=self.val_split, random_state=42
         )
 
         val_dataset = PLDatasetWrapper(
@@ -125,13 +172,23 @@ class PLDataModule(pl.LightningDataModule):
 
         self._train_dataset = Subset(train_dataset, train_indices)
         self._val_dataset = Subset(val_dataset, val_indices)
-    
+
     def train_dataloader(self):
         return DataLoader(
-            self._train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers
+            self._train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
         )
 
     def val_dataloader(self):
         return DataLoader(
-            self._val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers
+            self._val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
         )
+
+    # TODO: change to actual test dataset?
+    def test_dataloader(self):
+        return self.val_dataloader()

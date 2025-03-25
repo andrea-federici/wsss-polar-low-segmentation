@@ -35,7 +35,7 @@ plot_preds_at_epoch:
   every: 5
 
 #### Training params
-batch_size: 32
+batch_size: 16 # was 32
 epochs: 150
 patience: 30
 limit_train_batches: null

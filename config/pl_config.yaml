@@ -1,0 +1,12 @@
+defaults:
+  - default
+  - override dataset: polar_lows
+  - override lr_scheduler: redplat
+
+logger:
+  use_env_token: True
+  project: andreaf/polarlows
+
+checkpoints: True
+
+run_tags: ['polar-lows-seg']
