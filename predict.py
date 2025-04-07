@@ -104,26 +104,36 @@ def run(cfg: DictConfig) -> float:
     with torch.no_grad():
         for batch_idx, (x, y) in enumerate(dl):
             x, y = x.to("cuda"), y.to("cuda")
-            y_pred = model(x)
-            # y_pred is of type
-            # transformers.modeling_outputs.SemanticSegmenterOutput and
-            # y_pred.logits is a torch.Tensor of shape [32, 21, 64, 64].
-            # y is a torch.Tensor of shape [32, 256, 256].
-            logits = y_pred.logits
+            outputs = model(x)
+            outputs = models.utils.handle_outputs(outputs, x, model.nametag)
 
-            # TODO: not all upsamplers require interpolation. Look at the
-            # training step to see which need it.
-            y = torch.nn.functional.interpolate(
-                y.unsqueeze(1).float(),  # interpolate() expects a 4D tensor
-                size=logits.shape[-2:],  # resize to same H,W as logits
-                mode="nearest",
-            ).squeeze(
-                1
-            )  # remove the added channel dimension
-            loss = loss_fn(logits, y.long())
-
-            preds = torch.argmax(logits, dim=1).int()
+            loss = loss_fn(outputs, y.long())
+            preds = torch.argmax(outputs, dim=1).int()
             target = y.int()
+
+            # Convert logits or soft outputs to probability maps
+            # Assuming outputs is logits: apply softmax along the class dimension
+            softmax_outputs = torch.softmax(outputs, dim=1)
+
+            # Optional: Convert probabilities to CPU numpy arrays for CRF processing
+            # Process each image in the batch
+            refined_preds = []
+            for idx in range(softmax_outputs.shape[0]):
+                # Get the original image and predicted probability map
+                orig_img = x[idx].cpu().permute(1, 2, 0).numpy()
+                orig_img = (orig_img - orig_img.min()) / (
+                    orig_img.max() - orig_img.min()
+                )
+                prob_map = (
+                    softmax_outputs[idx].cpu().numpy()
+                )  # shape: (num_classes, H, W)
+
+                # Here, we assume binary segmentation for CRF.
+                # For binary, prob_map[0] is background and prob_map[1] is foreground.
+                # refined_mask = utils.crf_utils.refine_mask_with_crf(
+                #     orig_img, prob_map, num_classes=2, iterations=5
+                # )
+                # refined_preds.append(refined_mask)
 
             # Ignore void pixels for metrics only
             mask = target != 255
@@ -137,55 +147,91 @@ def run(cfg: DictConfig) -> float:
             )
 
             # TODO: use color map from misc.img_logging
-            cmap = plt.get_cmap("tab20", cfg.dataset.num_labels)  # VOC -> 21 classes
+            cmap = plt.get_cmap("viridis", cfg.dataset.num_labels)  # VOC -> 21 classes
 
             for idx in range(preds.shape[0]):
-                original_img = (
-                    x[idx].cpu().permute(1, 2, 0).numpy()
-                )  # Convert CHW -> HWC
+                # Convert image from tensor (CHW) to numpy (HWC) and normalize
+                original_img = x[idx].cpu().permute(1, 2, 0).numpy()
                 original_img = (original_img - original_img.min()) / (
                     original_img.max() - original_img.min()
-                )  # Normalize to [0, 1]
+                )
 
-                pred_mask = preds[idx].cpu().numpy()
-                target_mask = target[idx].cpu().numpy()
+                # Get predictions
+                pred_mask_original = (
+                    preds[idx].cpu().numpy()
+                )  # original prediction without CRF
+                # pred_mask_crf = refined_preds[idx]  # CRF refined mask
+                target_mask = target[idx].cpu().numpy()  # ground truth mask
 
-                # Resize predicted mask to match original image size
-                pred_resized = cv2.resize(
-                    pred_mask,
+                # Resize masks to match original image size
+                pred_resized_original = cv2.resize(
+                    pred_mask_original,
                     (original_img.shape[1], original_img.shape[0]),
                     interpolation=cv2.INTER_NEAREST,
                 )
+                # pred_resized_crf = cv2.resize(
+                #     pred_mask_crf,
+                #     (original_img.shape[1], original_img.shape[0]),
+                #     interpolation=cv2.INTER_NEAREST,
+                # )
                 target_resized = cv2.resize(
                     target_mask,
                     (original_img.shape[1], original_img.shape[0]),
                     interpolation=cv2.INTER_NEAREST,
                 )
 
-                pred_colored = cmap(pred_resized / cfg.dataset.num_labels)[
-                    :, :, :3
-                ]  # Apply colormap
+                # Apply colormap (cmap expects values normalized by the number of labels)
+                pred_colored_original = cmap(
+                    pred_resized_original / cfg.dataset.num_labels
+                )[:, :, :3]
+                # pred_colored_crf = cmap(pred_resized_crf / cfg.dataset.num_labels)[
+                #     :, :, :3
+                # ]
                 target_colored = cmap(target_resized / cfg.dataset.num_labels)[:, :, :3]
 
-                pred_overlay = 0.6 * original_img + 0.4 * pred_colored  # Blend
-                target_overlay = 0.6 * original_img + 0.4 * target_colored
+                # Override the background (label 0) to use the original image color
+                background_mask_pred = pred_resized_original == 0
+                pred_colored_original[background_mask_pred] = original_img[
+                    background_mask_pred
+                ]
 
-                plt.figure(figsize=(12, 4))
+                background_mask_target = target_resized == 0
+                target_colored[background_mask_target] = original_img[
+                    background_mask_target
+                ]
 
-                # Plot predicted mask
-                plt.subplot(1, 2, 1)
-                # plt.imshow(preds[idx].cpu().numpy(), cmap=cmap)
-                plt.imshow(pred_overlay)
-                plt.title("Predicted Mask")
+                # Create overlays by blending the original image with the colored masks
+                overlay_original = 0.6 * original_img + 0.4 * pred_colored_original
+                # overlay_crf = 0.6 * original_img + 0.4 * pred_colored_crf
+                overlay_target = 0.6 * original_img + 0.4 * target_colored
+
+                # Create a three-panel figure
+                plt.figure(figsize=(18, 4))
+
+                plt.subplot(1, 3, 1)
+                plt.imshow(original_img)
+                plt.title("Original Image")
                 plt.axis("off")
+
+                # Plot original prediction (without CRF)
+                plt.subplot(1, 3, 2)
+                plt.imshow(overlay_original)
+                plt.title("Prediction (no post-processing)")
+                plt.axis("off")
+
+                # Plot CRF refined prediction
+                # plt.subplot(1, 3, 2)
+                # plt.imshow(overlay_crf)
+                # plt.title("CRF Refined Prediction")
+                # plt.axis("off")
 
                 # Plot ground truth mask
-                plt.subplot(1, 2, 2)
-                # plt.imshow(target[idx].cpu().numpy(), cmap=cmap)
-                plt.imshow(target_overlay)
-                plt.title("Ground Truth Mask")
+                plt.subplot(1, 3, 3)
+                plt.imshow(overlay_target)
+                plt.title("Pseudo Label")
                 plt.axis("off")
 
+                # Save and close the figure
                 plt.savefig(
                     os.path.join(
                         output_dir, f"segmentation_comparison_{batch_idx}_{idx}.png"
@@ -194,7 +240,6 @@ def run(cfg: DictConfig) -> float:
                     bbox_inches="tight",
                 )
                 plt.close()
-
             print(f"Batch {batch_idx}: Loss: {loss.item()}, Mean IoU: " f"{mean_iou}")
 
             # print(f"y shape: {y.shape}")

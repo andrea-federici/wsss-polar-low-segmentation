@@ -31,10 +31,7 @@ class PLDatasetWrapper(Dataset):
     def __getitem__(self, idx):
         img_path = os.path.join(self.image_dir, self.images[idx])
         print(f"img_path: {img_path}")
-        mask_path = (
-            os.path.join(self.mask_dir, self.images[idx].replace(".jpg", ".png"))
-            + ".png"
-        )  # TODO: remove the .png at the end once the file naming is fixed
+        mask_path = os.path.join(self.mask_dir, self.images[idx])
 
         print(f"mask_path: {mask_path}")
 
@@ -102,8 +99,9 @@ class PLDataModule(pl.LightningDataModule):
                 [
                     alb.Resize(self.height, self.width, p=1.0),
                     alb.ShiftScaleRotate(
-                        shift_limit=0.2,
-                        scale_limit=0.1,
+                        shift_limit=0.5,
+                        scale_limit=0.2,
+                        rotate_limit=45,
                         border_mode=cv2.BORDER_CONSTANT,
                         value=0,
                         p=1.0,
@@ -118,7 +116,10 @@ class PLDataModule(pl.LightningDataModule):
                         value=0,
                         p=1.0,
                     ),
-                    alb.RandomCrop(self.height, self.width, p=1.0),
+                    alb.RandomCrop(
+                        self.height, self.width, p=1.0
+                    ),  # I don't think this is doing anything since the image size is
+                    # the same as the crop size
                     ToTensorV2(),
                 ]
             )

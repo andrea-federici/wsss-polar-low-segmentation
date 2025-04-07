@@ -1,6 +1,7 @@
 defaults:
   - default
   - override dataset: polar_lows
+  - override model: segformer # smp
   - override lr_scheduler: redplat
 
 logger:
