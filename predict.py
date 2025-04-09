@@ -96,7 +96,7 @@ def run(cfg: DictConfig) -> float:
         )
     data_module.prepare_data()
     data_module.setup(stage="test")
-    dl = data_module.test_dataloader()
+    dl = data_module.val_dataloader()
 
     output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
@@ -130,10 +130,10 @@ def run(cfg: DictConfig) -> float:
 
                 # Here, we assume binary segmentation for CRF.
                 # For binary, prob_map[0] is background and prob_map[1] is foreground.
-                # refined_mask = utils.crf_utils.refine_mask_with_crf(
-                #     orig_img, prob_map, num_classes=2, iterations=5
-                # )
-                # refined_preds.append(refined_mask)
+                refined_mask = utils.crf_utils.refine_mask_with_crf(
+                    orig_img, prob_map, num_classes=cfg.dataset.num_labels, iterations=5
+                )
+                refined_preds.append(refined_mask)
 
             # Ignore void pixels for metrics only
             mask = target != 255
@@ -160,7 +160,7 @@ def run(cfg: DictConfig) -> float:
                 pred_mask_original = (
                     preds[idx].cpu().numpy()
                 )  # original prediction without CRF
-                # pred_mask_crf = refined_preds[idx]  # CRF refined mask
+                pred_mask_crf = refined_preds[idx]  # CRF refined mask
                 target_mask = target[idx].cpu().numpy()  # ground truth mask
 
                 # Resize masks to match original image size
@@ -169,11 +169,11 @@ def run(cfg: DictConfig) -> float:
                     (original_img.shape[1], original_img.shape[0]),
                     interpolation=cv2.INTER_NEAREST,
                 )
-                # pred_resized_crf = cv2.resize(
-                #     pred_mask_crf,
-                #     (original_img.shape[1], original_img.shape[0]),
-                #     interpolation=cv2.INTER_NEAREST,
-                # )
+                pred_resized_crf = cv2.resize(
+                    pred_mask_crf,
+                    (original_img.shape[1], original_img.shape[0]),
+                    interpolation=cv2.INTER_NEAREST,
+                )
                 target_resized = cv2.resize(
                     target_mask,
                     (original_img.shape[1], original_img.shape[0]),
@@ -184,15 +184,20 @@ def run(cfg: DictConfig) -> float:
                 pred_colored_original = cmap(
                     pred_resized_original / cfg.dataset.num_labels
                 )[:, :, :3]
-                # pred_colored_crf = cmap(pred_resized_crf / cfg.dataset.num_labels)[
-                #     :, :, :3
-                # ]
+                pred_colored_crf = cmap(pred_resized_crf / cfg.dataset.num_labels)[
+                    :, :, :3
+                ]
                 target_colored = cmap(target_resized / cfg.dataset.num_labels)[:, :, :3]
 
                 # Override the background (label 0) to use the original image color
                 background_mask_pred = pred_resized_original == 0
                 pred_colored_original[background_mask_pred] = original_img[
                     background_mask_pred
+                ]
+
+                background_mask_crf = pred_resized_crf == 0
+                pred_colored_crf[background_mask_crf] = original_img[
+                    background_mask_crf
                 ]
 
                 background_mask_target = target_resized == 0
@@ -202,31 +207,31 @@ def run(cfg: DictConfig) -> float:
 
                 # Create overlays by blending the original image with the colored masks
                 overlay_original = 0.6 * original_img + 0.4 * pred_colored_original
-                # overlay_crf = 0.6 * original_img + 0.4 * pred_colored_crf
+                overlay_crf = 0.6 * original_img + 0.4 * pred_colored_crf
                 overlay_target = 0.6 * original_img + 0.4 * target_colored
 
                 # Create a three-panel figure
                 plt.figure(figsize=(18, 4))
 
-                plt.subplot(1, 3, 1)
+                plt.subplot(1, 4, 1)
                 plt.imshow(original_img)
                 plt.title("Original Image")
                 plt.axis("off")
 
                 # Plot original prediction (without CRF)
-                plt.subplot(1, 3, 2)
+                plt.subplot(1, 4, 2)
                 plt.imshow(overlay_original)
                 plt.title("Prediction (no post-processing)")
                 plt.axis("off")
 
                 # Plot CRF refined prediction
-                # plt.subplot(1, 3, 2)
-                # plt.imshow(overlay_crf)
-                # plt.title("CRF Refined Prediction")
-                # plt.axis("off")
+                plt.subplot(1, 4, 3)
+                plt.imshow(overlay_crf)
+                plt.title("CRF Refined Prediction")
+                plt.axis("off")
 
                 # Plot ground truth mask
-                plt.subplot(1, 3, 3)
+                plt.subplot(1, 4, 4)
                 plt.imshow(overlay_target)
                 plt.title("Pseudo Label")
                 plt.axis("off")

@@ -3,6 +3,7 @@ defaults:
   - override dataset: polar_lows
   - override model: segformer # smp
   - override lr_scheduler: redplat
+  - override loss: dice_ce_mse
 
 logger:
   use_env_token: True

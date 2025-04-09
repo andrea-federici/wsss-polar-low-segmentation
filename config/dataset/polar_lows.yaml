@@ -10,3 +10,4 @@ dataset:
   width: 500
   height: 500
   augment: True
+  class_weight: '${listprod: [1.0], ${dataset.num_labels}}'

@@ -1,6 +1,0 @@
-# @package _global_
-
-loss:
-  name: dice_ce_multiclass
-  hparams:
-    dice_w: 0.5

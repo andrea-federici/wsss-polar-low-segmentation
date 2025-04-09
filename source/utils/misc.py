@@ -5,12 +5,14 @@ import subprocess as sp
 from typing import Tuple, Any, List
 from omegaconf import OmegaConf
 
+
 def byte_to_megabyte(value: int, digits: int = 2) -> float:
     return round(value / (1024 * 1024), digits)
 
 
 def medibyte_to_megabyte(value: int, digits: int = 2) -> float:
     return round(1.0485 * value, digits)
+
 
 def get_gpu_memory_from_nvidia_smi(  # pragma: no cover
     device: int = 0,
@@ -30,20 +32,20 @@ def get_gpu_memory_from_nvidia_smi(  # pragma: no cover
         digits (int): The number of decimals to use for megabytes.
             (default: :obj:`2`)
     """
-    CMD = 'nvidia-smi --query-gpu=memory.free --format=csv'
-    free_out = sp.check_output(CMD.split()).decode('utf-8').split('\n')[1:-1]
+    CMD = "nvidia-smi --query-gpu=memory.free --format=csv"
+    free_out = sp.check_output(CMD.split()).decode("utf-8").split("\n")[1:-1]
 
-    CMD = 'nvidia-smi --query-gpu=memory.used --format=csv'
-    used_out = sp.check_output(CMD.split()).decode('utf-8').split('\n')[1:-1]
+    CMD = "nvidia-smi --query-gpu=memory.used --format=csv"
+    used_out = sp.check_output(CMD.split()).decode("utf-8").split("\n")[1:-1]
 
     if device < 0 or device >= len(free_out):
-        raise AttributeError(
-            f'GPU {device} not available (found {len(free_out)} GPUs)')
+        raise AttributeError(f"GPU {device} not available (found {len(free_out)} GPUs)")
 
     free_mem = medibyte_to_megabyte(int(free_out[device].split()[0]), digits)
     used_mem = medibyte_to_megabyte(int(used_out[device].split()[0]), digits)
 
     return free_mem, used_mem
+
 
 def find_devices(max_devices: int = 1, greedy: bool = False, gamma: int = 12):
     # if no gpus are available return None
@@ -54,13 +56,14 @@ def find_devices(max_devices: int = 1, greedy: bool = False, gamma: int = 12):
     if n_gpus == 1:
         return 1
     # if multiple gpus are available, return gpu id list with length max_devices
-    visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES')
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
     if visible_devices is not None:
-        visible_devices = [int(i) for i in visible_devices.split(',')]
+        visible_devices = [int(i) for i in visible_devices.split(",")]
     else:
         visible_devices = range(n_gpus)
-    available_memory = np.asarray([get_gpu_memory_from_nvidia_smi(device)[0]
-                                   for device in visible_devices])
+    available_memory = np.asarray(
+        [get_gpu_memory_from_nvidia_smi(device)[0] for device in visible_devices]
+    )
     # if greedy, return `max_devices` gpus sorted by available capacity
     if greedy:
         devices = np.argsort(available_memory)[::-1].tolist()
@@ -69,24 +72,27 @@ def find_devices(max_devices: int = 1, greedy: bool = False, gamma: int = 12):
     p = (available_memory / np.linalg.norm(available_memory, gamma)) ** gamma
     # ensure p sums to 1
     p = p / p.sum()
-    devices = np.random.choice(np.arange(len(p)), size=max_devices,
-                               replace=False, p=p)
+    devices = np.random.choice(np.arange(len(p)), size=max_devices, replace=False, p=p)
     return devices.tolist()
 
+
 def reduce_precision():
-    torch.set_float32_matmul_precision('medium')
+    torch.set_float32_matmul_precision("medium")
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
+
 def ensure_list(value: Any) -> List:
-    if hasattr(value, '__iter__') and not isinstance(value, str):
+    if hasattr(value, "__iter__") and not isinstance(value, str):
         return list(value)
     else:
         return [value]
 
+
 def cat_resolver(*objs) -> List:
-    ll= [elem for obj in objs for elem in ensure_list(obj)]
+    ll = [elem for obj in objs for elem in ensure_list(obj)]
     return ll
+
 
 def prod_resolver(*x):
     p = x[0]
@@ -94,22 +100,32 @@ def prod_resolver(*x):
         p *= elem
     return p
 
+
+def listmult_resolver(list_value: List[Any], times: int) -> List[Any]:
+    assert isinstance(list_value, list), f"Expected a list, got {type(list_value)}"
+    return list_value * times
+
+
 def register_resolvers():
     # ${neg:-4} -> 4
-    OmegaConf.register_new_resolver(name='neg', resolver=lambda x: -x)
+    OmegaConf.register_new_resolver(name="neg", resolver=lambda x: -x)
     # ${in:2,[1,2,3]} -> True
-    OmegaConf.register_new_resolver(name='in', resolver=lambda x, a: x in a)
+    OmegaConf.register_new_resolver(name="in", resolver=lambda x, a: x in a)
     # ${not:True} -> False
-    OmegaConf.register_new_resolver(name='not', resolver=lambda x: not x)
+    OmegaConf.register_new_resolver(name="not", resolver=lambda x: not x)
     # ${sum:1,2,3,4} -> 10
-    OmegaConf.register_new_resolver(name='sum', resolver=lambda *x: sum(x))
+    OmegaConf.register_new_resolver(name="sum", resolver=lambda *x: sum(x))
     # ${prod:1,2,3,4} -> 24
-    OmegaConf.register_new_resolver(name='prod', resolver=prod_resolver)
+    OmegaConf.register_new_resolver(name="prod", resolver=prod_resolver)
     # ${div:1,4} -> 0.25
-    OmegaConf.register_new_resolver(name='div', resolver=lambda x, d: x / d)
+    OmegaConf.register_new_resolver(name="div", resolver=lambda x, d: x / d)
     # ${exp:3,2} -> 9
-    OmegaConf.register_new_resolver(name='exp', resolver=lambda x, e: x**e)
+    OmegaConf.register_new_resolver(name="exp", resolver=lambda x, e: x**e)
     # ${cat:1,2,[3,[4]]} -> [1,2,3,[4]]
-    OmegaConf.register_new_resolver(name='cat', resolver=cat_resolver)
+    OmegaConf.register_new_resolver(name="cat", resolver=cat_resolver)
     # ${merge:[1,2,3],[4,5]} -> [1,2,3,4,5]
-    OmegaConf.register_new_resolver("merge", lambda x, y : x + y)
+    OmegaConf.register_new_resolver("merge", lambda x, y: x + y)
+    # ${listprod: [2], 3} -> [2, 2, 2]
+    OmegaConf.register_new_resolver("listprod", listmult_resolver)
+    # ${round:1.3} -> 1
+    OmegaConf.register_new_resolver(name="round", resolver=lambda x: round(x))

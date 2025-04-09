@@ -3,6 +3,6 @@
 loss:
   name: dice_focal
   hparams:
-    pos_weight: 3.0
+    class_weight: ${dataset.class_weight}
     dice_w: 0.1
     squared_pred: False

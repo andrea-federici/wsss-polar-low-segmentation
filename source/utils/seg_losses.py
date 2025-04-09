@@ -1,85 +1,141 @@
 import torch.nn.functional as F
 import torch
 from typing import Optional
-from monai.losses import DiceCELoss, DiceFocalLoss, GeneralizedDiceFocalLoss, TverskyLoss
+from monai.losses import (
+    DiceCELoss,
+    DiceFocalLoss,
+    GeneralizedDiceFocalLoss,
+    TverskyLoss,
+)
 
-# TODO: at the moment the only loss that works on VOC is dice_ce_multiclass. The other losses should be adapted for the multi-class case
 
-def loss_getter(name: str = None,
-                pos_weight: Optional[float] = 1.0,
-                dice_w: Optional[float] = 0.5,
-                squared_pred: Optional[bool] = False,
-                **kwargs):
-        
-    if name=='custom_dice_ce':
-        return lambda x, y: dice_ce_loss(x, y, class_weights=torch.tensor([1.0, pos_weight]).to(x.device), 
-                                         squared_pred=squared_pred, dice_w=dice_w, **kwargs)
-    if name=='dice_ce':
-        loss = DiceCELoss_wrap(softmax=True, reduction='mean', squared_pred=squared_pred, lambda_dice=dice_w, 
-                          lambda_ce=1.0-dice_w, to_onehot_y=True, **kwargs)
-        return lambda x, y: loss(x, y.unsqueeze(1), ce_weight=torch.tensor([1.0, pos_weight]).to(x.device))
-    elif name=='dice_focal':
-        loss = DiceFocalLoss(softmax=True, reduction='mean', to_onehot_y=True, squared_pred=squared_pred,
-                             focal_weight=[1.0, pos_weight],  lambda_dice=dice_w, 
-                             lambda_focal=1.0-dice_w,**kwargs)
-        return lambda x, y: loss(x, y.unsqueeze(1))
-    elif name=='general_dice_focal':
-        loss = GeneralizedDiceFocalLoss(softmax=True, reduction='mean', to_onehot_y=True,
-                                        focal_weight=[1.0, pos_weight], lambda_gdl=dice_w, 
-                                        lambda_focal=1.0-dice_w, **kwargs)
-        return lambda x, y: loss(x, y.unsqueeze(1))
-    elif name=='tversky':
+def loss_getter(
+    name: str = None,
+    class_weight: Optional[float] = None,
+    dice_w: Optional[float] = 0.5,
+    mse_w: Optional[float] = 0.1,
+    squared_pred: Optional[bool] = False,
+    **kwargs,
+):
+
+    if name == "custom_dice_ce":
+        return lambda x, y: dice_ce_loss(
+            predictions=x,
+            ground_truths=y,
+            class_weights=torch.tensor(class_weight).to(x.device),
+            ignore_index=255,
+            dice_w=dice_w,
+            **kwargs,
+        )
+
+    elif name == "dice_ce_mse":
+        return lambda x, y: dice_ce_mse_loss(
+            predictions=x,
+            ground_truths=y,
+            class_weights=torch.tensor(class_weight).to(x.device),
+            ignore_index=255,
+            dice_w=dice_w,
+            mse_w=mse_w,
+            squared_pred=squared_pred,
+            **kwargs,
+        )
+
+    elif name == "dice_ce":
+        base_loss = DiceCELoss_wrap(
+            softmax=True,
+            reduction="mean",
+            squared_pred=squared_pred,
+            lambda_dice=dice_w,
+            lambda_ce=1.0 - dice_w,
+            to_onehot_y=True,
+            **kwargs,
+        )
+
+        def wrapped_loss(x, y):
+            # Some losses do not have an ignore_index parameter, we must handle 255 ourselves
+            # x shape [B,C,H,W], y shape [B,H,W] with 255 for void
+            # Replace void (255) with 0 (background)
+            y = torch.where(y == 255, torch.zeros_like(y), y)
+            return base_loss(
+                x, y.unsqueeze(1), ce_weight=torch.tensor(class_weight).to(x.device)
+            )
+
+        return wrapped_loss
+
+    elif name == "dice_focal":
+        base_loss = DiceFocalLoss(
+            softmax=True,
+            reduction="mean",
+            to_onehot_y=True,
+            include_background=True,  # Assumes 0 is background
+            squared_pred=squared_pred,
+            weight=class_weight,
+            lambda_dice=dice_w,
+            lambda_focal=1.0 - dice_w,
+            **kwargs,
+        )
+
+        def wrapped_loss(x, y):
+            # Some losses do not have an ignore_index parameter, we must handle 255 ourselves
+            # x shape [B,C,H,W], y shape [B,H,W] with 255 for void
+            # Replace void (255) with 0 (background)
+            y = torch.where(y == 255, torch.zeros_like(y), y)
+            return base_loss(x, y.unsqueeze(1))
+
+        return wrapped_loss
+
+    elif name == "general_dice_focal":
+        base_loss = GeneralizedDiceFocalLoss(
+            softmax=True,
+            reduction="mean",
+            to_onehot_y=True,
+            include_background=True,  # Assumes 0 is background
+            weight=class_weight,
+            lambda_gdl=dice_w,
+            lambda_focal=1.0 - dice_w,
+            **kwargs,
+        )
+
+        def wrapped_loss(x, y):
+            # Some losses do not have an ignore_index parameter, we must handle 255 ourselves
+            # x shape [B,C,H,W], y shape [B,H,W] with 255 for void
+            # Replace void (255) with 0 (background)
+            y = torch.where(y == 255, torch.zeros_like(y), y)
+            return base_loss(x, y.unsqueeze(1))
+
+        return wrapped_loss
+
+    elif name == "tversky":
         # FNs should be weighted more than FPs in highly imbalanced dataset
         # alpha: weight of FP -- beta: weight of FN
-        loss = TverskyLoss(softmax=True, reduction='mean', to_onehot_y=True, alpha=0.3, beta=0.7)
-        return lambda x, y: loss(x, y.unsqueeze(1))
-    
-    elif name=='dice_ce_multiclass':
-        return lambda x, y: dice_ce_loss_multiclass(x, y, class_weights=None, 
-                                                    ignore_index=255, dice_w=dice_w)
+        base_loss = TverskyLoss(
+            softmax=True,
+            reduction="mean",
+            to_onehot_y=True,
+            include_background=True,  # Assumes 0 is background
+            **kwargs,
+        )
+
+        def wrapped_loss(x, y):
+            # Some losses do not have an ignore_index parameter, we must handle 255 ourselves
+            # x shape [B,C,H,W], y shape [B,H,W] with 255 for void
+            # Replace void (255) with 0 (background)
+            y = torch.where(y == 255, torch.zeros_like(y), y)
+            return base_loss(x, y.unsqueeze(1))
+
+        return wrapped_loss
+
     else:
         raise NotImplementedError(f"Loss {name} not implemented")
 
-
-def dice_ce_loss(predictions, 
-                ground_truths, 
-                class_weights=None, 
-                dice_w=0.5, 
-                num_classes=2, 
-                dims=(1, 2), 
-                smooth=1e-5,
-                squared_pred=False):
-    """
-    Smooth Dice coefficient + Cross-entropy loss 
-    """
-    
-    CE_loss = F.cross_entropy(predictions, ground_truths, 
-                              weight=class_weights.to(predictions.device))
-    
-    if dice_w > 0:
-        ground_truth_oh = F.one_hot(ground_truths, num_classes=num_classes)
-        prediction_norm = F.softmax(predictions, dim=1).permute(0, 2, 3, 1)
-
-        intersection = (prediction_norm * ground_truth_oh).sum(dim=dims)
-        if squared_pred:
-            summation = torch.sum(prediction_norm**2, dim=dims) + torch.sum(ground_truth_oh**2, dim=dims)
-        else:
-            summation = prediction_norm.sum(dim=dims) + ground_truth_oh.sum(dim=dims)
-
-        dice = (2.0 * intersection + smooth) / (summation + smooth)
-        # dice = torch.matmul(dice, class_weights.to(predictions.device))
-        dice_loss = 1.0 - dice.mean()        
-        return dice_w*dice_loss + (1.0 - dice_w)*CE_loss
-    
-    else:
-        return CE_loss
-    
 
 class DiceCELoss_wrap(DiceCELoss):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def forward(self, input: torch.Tensor, target: torch.Tensor, ce_weight: torch.Tensor):
+    def forward(
+        self, input: torch.Tensor, target: torch.Tensor, ce_weight: torch.Tensor
+    ):
         if len(input.shape) != len(target.shape):
             raise ValueError(
                 "the number of dimensions for input and target should be the same, "
@@ -96,22 +152,24 @@ class DiceCELoss_wrap(DiceCELoss):
             target = target.to(dtype=input.dtype)
 
         ce_loss = F.cross_entropy(input, target, weight=ce_weight.to(target.device))
-        total_loss: torch.Tensor = self.lambda_dice * dice_loss + self.lambda_ce * ce_loss
+        total_loss: torch.Tensor = (
+            self.lambda_dice * dice_loss + self.lambda_ce * ce_loss
+        )
 
         return total_loss
-    
 
-def dice_ce_loss_multiclass(
+
+def dice_ce_loss(
     predictions: torch.Tensor,
     ground_truths: torch.Tensor,
     class_weights: torch.Tensor = None,
     dice_w: float = 0.5,
     ignore_index: int = 255,
     smooth: float = 1e-5,
-    squared_pred: bool = False
+    squared_pred: bool = False,
 ):
     """
-    A multi-class version of dice + cross-entropy loss.
+    A custom version of dice + cross-entropy loss supporting multi-classes.
 
     Args:
         predictions: shape [B, C, H, W]
@@ -129,10 +187,10 @@ def dice_ce_loss_multiclass(
     # (1) Cross-entropy loss for multi-class.
     #     ignore_index=255 means the 'void' labeled pixels in VOC won't affect CE
     CE_loss = F.cross_entropy(
-        predictions, 
-        ground_truths, 
-        weight=class_weights,      # e.g. shape = [C], if you have class weighting
-        ignore_index=ignore_index  # skip “void” label if your dataset uses 255
+        predictions,
+        ground_truths,
+        weight=class_weights,  # e.g. shape = [C], if you have class weighting
+        ignore_index=ignore_index,  # skip “void” label if your dataset uses 255
     )
 
     # If we do not want a dice component, just return CE.
@@ -146,14 +204,16 @@ def dice_ce_loss_multiclass(
     if ignore_index is not None:
         valid_mask = ground_truths != ignore_index
         # Replace 'void' with 0 just so one_hot won't exceed index range
-        ground_truths = torch.where(valid_mask, ground_truths, torch.zeros_like(ground_truths))
+        ground_truths = torch.where(
+            valid_mask, ground_truths, torch.zeros_like(ground_truths)
+        )
 
     B, C, H, W = predictions.shape
 
     # One-hot encode the ground-truth to [B, C, H, W]
     # e.g. if ground_truths in [0..C-1], then:
     gt_onehot = F.one_hot(ground_truths, num_classes=C)  # [B, H, W, C]
-    gt_onehot = gt_onehot.permute(0, 3, 1, 2).float()    # -> [B, C, H, W]
+    gt_onehot = gt_onehot.permute(0, 3, 1, 2).float()  # -> [B, C, H, W]
 
     # Probability map via softmax across channels
     pred_probs = F.softmax(predictions, dim=1)  # shape [B, C, H, W]
@@ -168,13 +228,68 @@ def dice_ce_loss_multiclass(
     intersection = torch.sum(pred_probs * gt_onehot, dim=(2, 3))  # [B, C]
     if squared_pred:
         pred_sum = torch.sum(pred_probs**2, dim=(2, 3))
-        gt_sum   = torch.sum(gt_onehot**2,  dim=(2, 3))
+        gt_sum = torch.sum(gt_onehot**2, dim=(2, 3))
     else:
         pred_sum = torch.sum(pred_probs, dim=(2, 3))
-        gt_sum   = torch.sum(gt_onehot, dim=(2, 3))
+        gt_sum = torch.sum(gt_onehot, dim=(2, 3))
 
     dice_per_class = (2.0 * intersection + smooth) / (pred_sum + gt_sum + smooth)
     dice_loss = 1.0 - dice_per_class.mean()  # average over batch & classes
 
     # Combine
     return dice_w * dice_loss + (1.0 - dice_w) * CE_loss
+
+
+def dice_ce_mse_loss(
+    predictions: torch.Tensor,
+    ground_truths: torch.Tensor,
+    class_weights: torch.Tensor = None,
+    dice_w: float = 0.5,
+    mse_w: float = 0.1,
+    ignore_index: int = 255,
+    smooth: float = 1e-5,
+    squared_pred: bool = False,
+):
+    """
+    Combines the Dice+CE loss with an additional MSE loss that captures
+    the ordinal relationship among labels.
+    """
+    # First, compute the standard Dice+CE loss
+    loss_dice_ce = dice_ce_loss(
+        predictions,
+        ground_truths,
+        class_weights=class_weights,
+        dice_w=dice_w,
+        ignore_index=ignore_index,
+        smooth=smooth,
+        squared_pred=squared_pred,
+    )
+
+    # Compute the MSE component.
+    # Here we convert the network's output into an expectation over class labels.
+    # Assuming the classes are ordered (0, 1, 2, ...), we compute the expected label.
+    pred_probs = F.softmax(predictions, dim=1)  # [B, C, H, W]
+    num_classes = predictions.shape[1]
+
+    # Create an index tensor with values 0, 1, ..., num_classes-1
+    indices = torch.arange(
+        num_classes, device=predictions.device, dtype=predictions.dtype
+    )
+
+    # Compute the expectation for each pixel: sum_c (c * p(c))
+    pred_expectation = (pred_probs * indices.view(1, -1, 1, 1)).sum(dim=1)  # [B, H, W]
+
+    # Prepare the mask to ignore void labels
+    valid_mask = ground_truths != ignore_index
+
+    # For MSE, only consider valid pixels
+    if valid_mask.sum() > 0:
+        mse_loss = F.mse_loss(
+            pred_expectation[valid_mask],
+            ground_truths[valid_mask].to(pred_expectation.dtype),
+        )
+    else:
+        mse_loss = torch.tensor(0.0, device=predictions.device)
+
+    total_loss = (1 - mse_w) * loss_dice_ce + mse_w * mse_loss
+    return total_loss

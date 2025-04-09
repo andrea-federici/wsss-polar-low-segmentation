@@ -5,7 +5,7 @@ defaults:
   - model: segformer
   - optimizer: adamW
   - lr_scheduler: cosine
-  - loss: dice_ce_multi
+  - loss: custom_dice_ce
 
 #### Log and sweep params 
 hydra:
