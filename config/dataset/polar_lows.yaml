@@ -3,11 +3,11 @@
 
 dataset:
   name: polar-lows
-  image_dir: data/pl/images/train/pos
+  image_dir: data/pl/images/train
   mask_dir: data/pl/masks
-  num_labels: 7
+  num_labels: 8
   channels: [0, 1, 2]
-  width: 500
-  height: 500
+  width: 512
+  height: 512
   augment: True
   class_weight: '${listprod: [1.0], ${dataset.num_labels}}'

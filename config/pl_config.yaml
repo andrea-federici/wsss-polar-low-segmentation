@@ -1,15 +1,16 @@
 defaults:
   - default
   - override dataset: polar_lows
-  - override model: segformer # smp
+  - override model: smp
   - override lr_scheduler: redplat
-  - override loss: dice_ce_mse
+  - override loss: dice_ce
 
 logger:
   use_env_token: True
   project: andreaf/polarlows
 
 batch_size: 16
+patience: 40
 
 checkpoints: True
 

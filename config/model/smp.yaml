@@ -4,5 +4,5 @@ model:
   name: smp
   hparams:
     arch: deeplabv3plus
-    encoder: resnet18 #tu-xception41
+    encoder: mit_b3
     encoder_weights: imagenet # ssl swsl

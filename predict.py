@@ -62,6 +62,7 @@ def run(cfg: DictConfig) -> float:
     seg = models.sar_module.Segmentation.load_from_checkpoint(
         checkpoint_path,
         model=model,
+        num_labels=cfg.dataset.num_labels,
         loss_fn=loss_fn,
         optim_class=getattr(torch.optim, cfg.optimizer.name),
         optim_kwargs=dict(cfg.optimizer.hparams),
@@ -73,7 +74,7 @@ def run(cfg: DictConfig) -> float:
     )
 
     model = seg.model
-    model.eval()
+    model.eval().to("cuda")
 
     # Data module:
     if cfg.dataset.name == utils.constants.VOC_DATASET_NAME:
@@ -95,7 +96,7 @@ def run(cfg: DictConfig) -> float:
             num_workers=cfg.workers,
         )
     data_module.prepare_data()
-    data_module.setup(stage="test")
+    data_module.setup(stage="val")
     dl = data_module.val_dataloader()
 
     output_dir = "output"
@@ -103,6 +104,28 @@ def run(cfg: DictConfig) -> float:
 
     with torch.no_grad():
         for batch_idx, (x, y) in enumerate(dl):
+            # if batch_idx == 0:
+            #     img_path = "data/pl/images/train/03cb6a_20191204T073021_20191204T073211_mos_rgb.png"
+            #     from PIL import Image
+
+            #     img = Image.open(img_path)
+            #     import torchvision.transforms.transforms as transforms
+            #     from torchvision.transforms.functional import pil_to_tensor
+
+            #     img_tens = pil_to_tensor(img)
+
+            #     comp = transforms.Compose(
+            #         [
+            #             transforms.Normalize(
+            #                 mean=[0.2872, 0.2872, 0.4595], std=[0.1806, 0.1806, 0.2621]
+            #             ),
+            #             transforms.ToTensor(),
+            #         ]
+            #     )
+            #     img_tens = comp(img_tens)
+            #     print(img_tens.shape)
+            #     return
+
             x, y = x.to("cuda"), y.to("cuda")
             outputs = model(x)
             outputs = models.utils.handle_outputs(outputs, x, model.nametag)
@@ -163,6 +186,14 @@ def run(cfg: DictConfig) -> float:
                 pred_mask_crf = refined_preds[idx]  # CRF refined mask
                 target_mask = target[idx].cpu().numpy()  # ground truth mask
 
+                if target_mask.sum() == 0:
+                    gt_label = 0
+                else:
+                    gt_label = 1
+
+                if gt_label == 0:
+                    continue
+
                 # Resize masks to match original image size
                 pred_resized_original = cv2.resize(
                     pred_mask_original,
@@ -211,27 +242,27 @@ def run(cfg: DictConfig) -> float:
                 overlay_target = 0.6 * original_img + 0.4 * target_colored
 
                 # Create a three-panel figure
-                plt.figure(figsize=(18, 4))
+                plt.figure(figsize=(14, 4))
 
-                plt.subplot(1, 4, 1)
+                plt.subplot(1, 3, 1)
                 plt.imshow(original_img)
-                plt.title("Original Image")
+                plt.title(f"Original Image. GT Label: {gt_label}")
                 plt.axis("off")
 
                 # Plot original prediction (without CRF)
-                plt.subplot(1, 4, 2)
+                plt.subplot(1, 3, 2)
                 plt.imshow(overlay_original)
                 plt.title("Prediction (no post-processing)")
                 plt.axis("off")
 
-                # Plot CRF refined prediction
-                plt.subplot(1, 4, 3)
-                plt.imshow(overlay_crf)
-                plt.title("CRF Refined Prediction")
-                plt.axis("off")
+                # # Plot CRF refined prediction
+                # plt.subplot(1, 4, 3)
+                # plt.imshow(overlay_crf)
+                # plt.title("CRF Refined Prediction")
+                # plt.axis("off")
 
                 # Plot ground truth mask
-                plt.subplot(1, 4, 4)
+                plt.subplot(1, 3, 3)
                 plt.imshow(overlay_target)
                 plt.title("Pseudo Label")
                 plt.axis("off")

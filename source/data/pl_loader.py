@@ -30,10 +30,7 @@ class PLDatasetWrapper(Dataset):
 
     def __getitem__(self, idx):
         img_path = os.path.join(self.image_dir, self.images[idx])
-        print(f"img_path: {img_path}")
         mask_path = os.path.join(self.mask_dir, self.images[idx])
-
-        print(f"mask_path: {mask_path}")
 
         image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -48,13 +45,7 @@ class PLDatasetWrapper(Dataset):
         mask[mask == 255] = 1
 
         if self.transform is not None:
-            print(
-                f"Before transformation -> Image shape: {image.shape}, Mask shape: {mask.shape}"
-            )
             image, mask = self.transform(image, mask)
-            print(
-                f"After transformation -> Image shape: {image.shape}, Mask shape: {mask.shape}"
-            )
         else:
             image = TF.to_tensor(image, dtype=torch.long)
             mask = torch.tensor(mask, dtype=torch.long)

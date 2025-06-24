@@ -32,6 +32,8 @@ class Segmentation(BaseModule):
     def __init__(
         self,
         model: torch.nn.Module,
+        *,
+        num_labels: int,
         loss_fn: Type,
         optim_class: Optional[Type] = None,
         optim_kwargs: Optional[Mapping] = None,
@@ -54,25 +56,20 @@ class Segmentation(BaseModule):
         self.log_grad_norm = log_grad_norm
         self.sync_dist = sync_dist
         self.plot_preds_at_epoch = plot_dict
-        # self.train_metrics = torchmetrics.MetricCollection({'train_f1': BinaryF1Score(multidim_average='global'),
-        #                                                     'train_scores': BinaryStatScores(multidim_average='global')})
-        # self.val_metrics = torchmetrics.MetricCollection({'val_f1': BinaryF1Score(multidim_average='global'),
-        #                                                   'val_scores': BinaryStatScores(multidim_average='global')})
 
-        num_classes = 7
         self.train_metrics = torchmetrics.MetricCollection(
             {
-                "train_f1": MulticlassF1Score(num_classes=num_classes, average="macro"),
+                "train_f1": MulticlassF1Score(num_classes=num_labels, average="macro"),
                 "train_scores": MulticlassStatScores(
-                    num_classes=num_classes, average="macro"
+                    num_classes=num_labels, average="macro"
                 ),
             }
         )
         self.val_metrics = torchmetrics.MetricCollection(
             {
-                "val_f1": MulticlassF1Score(num_classes=num_classes, average="macro"),
+                "val_f1": MulticlassF1Score(num_classes=num_labels, average="macro"),
                 "val_scores": MulticlassStatScores(
-                    num_classes=num_classes, average="macro"
+                    num_classes=num_labels, average="macro"
                 ),
             }
         )

@@ -8,4 +8,4 @@ lr_scheduler:
     factor: 0.5
     patience: 10
     threshold: 1e-4
-    min_lr: 1e-6
+    min_lr: 1e-7

@@ -91,6 +91,7 @@ def run(cfg: DictConfig) -> float:
     elif cfg.dataset.name == utils.constants.PL_DATASET_NAME:
         seg = plm.sar_module.Segmentation(
             model=model,
+            num_labels=cfg.dataset.num_labels,
             loss_fn=loss_fn,
             optim_class=getattr(torch.optim, cfg.optimizer.name),
             optim_kwargs=dict(cfg.optimizer.hparams),
@@ -125,17 +126,20 @@ def run(cfg: DictConfig) -> float:
     else:
         raise NotImplementedError("Backend not in ['tensorboard','neptune']")
 
+    monitor = "val_loss"  # "val_f1"
+    mode = "min"  # "max"
+
     # Callbacks:
     early_stop_callback = EarlyStopping(
-        monitor="val_f1", patience=cfg["patience"], mode="max"
+        monitor=monitor, patience=cfg["patience"], mode=mode
     )
     cb = [early_stop_callback]
 
     if cfg.checkpoints:
         checkpoint_callback = ModelCheckpoint(
             save_top_k=1,
-            monitor="val_f1",
-            mode="max",
+            monitor="val_loss",
+            mode="min",
             dirpath=cfg.logger.logdir + "/checkpoints/",
             filename=model.nametag + "___{epoch:03d}-{val_f1:e}",
         )
@@ -157,7 +161,7 @@ def run(cfg: DictConfig) -> float:
 
     logger.finalize("success")
 
-    return trainer.callback_metrics["val_f1"].item()
+    return trainer.callback_metrics[monitor].item()
 
 
 if __name__ == "__main__":

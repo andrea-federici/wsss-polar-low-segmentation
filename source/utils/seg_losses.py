@@ -240,6 +240,7 @@ def dice_ce_loss(
     return dice_w * dice_loss + (1.0 - dice_w) * CE_loss
 
 
+# TODO: needs cleanup
 def dice_ce_mse_loss(
     predictions: torch.Tensor,
     ground_truths: torch.Tensor,
