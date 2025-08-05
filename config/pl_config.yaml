@@ -1,7 +1,7 @@
 defaults:
   - default
   - override dataset: polar_lows
-  - override model: smp
+  - override model: segformer
   - override lr_scheduler: redplat
   - override loss: dice_ce
 

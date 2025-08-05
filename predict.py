@@ -191,8 +191,8 @@ def run(cfg: DictConfig) -> float:
                 else:
                     gt_label = 1
 
-                if gt_label == 0:
-                    continue
+                # if gt_label == 0:
+                #     continue
 
                 # Resize masks to match original image size
                 pred_resized_original = cv2.resize(

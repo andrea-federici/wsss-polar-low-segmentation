@@ -126,6 +126,7 @@ def run(cfg: DictConfig) -> float:
     else:
         raise NotImplementedError("Backend not in ['tensorboard','neptune']")
 
+    # TODO: move to config file
     monitor = "val_loss"  # "val_f1"
     mode = "min"  # "max"
 
