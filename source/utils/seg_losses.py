@@ -17,7 +17,6 @@ def loss_getter(
     squared_pred: Optional[bool] = False,
     **kwargs,
 ):
-
     if name == "custom_dice_ce":
         return lambda x, y: dice_ce_loss(
             predictions=x,
@@ -164,7 +163,7 @@ def dice_ce_loss(
     ground_truths: torch.Tensor,
     class_weights: torch.Tensor = None,
     dice_w: float = 0.5,
-    ignore_index: int = 255,
+    ignore_index: int = None,
     smooth: float = 1e-5,
     squared_pred: bool = False,
 ):
@@ -184,47 +183,42 @@ def dice_ce_loss(
         A scalar tensor representing the combined dice+CE loss.
     """
 
-    # (1) Cross-entropy loss for multi-class.
-    #     ignore_index=255 means the 'void' labeled pixels in VOC won't affect CE
-    CE_loss = F.cross_entropy(
+    # --- Cross-Entropy Loss ---
+    ce_loss = F.cross_entropy(
         predictions,
         ground_truths,
         weight=class_weights,  # e.g. shape = [C], if you have class weighting
         ignore_index=ignore_index,  # skip “void” label if your dataset uses 255
     )
 
-    # If we do not want a dice component, just return CE.
+    # If no Dice contribution, return CE directly
     if dice_w <= 0:
-        return CE_loss
+        return ce_loss
 
-    # (2) Dice loss for multi-class
-    #     We must ignore 'void' pixels in the dice portion too if we want consistent metrics.
-    #     The simplest approach is to create a mask for valid pixels:
-    valid_mask = None
+    # --- Prepare ground truth for Dice ---
     if ignore_index is not None:
         valid_mask = ground_truths != ignore_index
-        # Replace 'void' with 0 just so one_hot won't exceed index range
         ground_truths = torch.where(
             valid_mask, ground_truths, torch.zeros_like(ground_truths)
         )
+    else:
+        valid_mask = torch.ones_like(ground_truths, dtype=torch.bool)
 
-    B, C, H, W = predictions.shape
+    _, C, _, _ = predictions.shape
 
     # One-hot encode the ground-truth to [B, C, H, W]
-    # e.g. if ground_truths in [0..C-1], then:
     gt_onehot = F.one_hot(ground_truths, num_classes=C)  # [B, H, W, C]
     gt_onehot = gt_onehot.permute(0, 3, 1, 2).float()  # -> [B, C, H, W]
 
     # Probability map via softmax across channels
     pred_probs = F.softmax(predictions, dim=1)  # shape [B, C, H, W]
 
-    # If ignoring void, zero out predictions where mask is invalid
-    if valid_mask is not None:
-        valid_mask = valid_mask.unsqueeze(1)  # shape [B, 1, H, W]
-        pred_probs = pred_probs * valid_mask
-        gt_onehot = gt_onehot * valid_mask
+    # Zero out predictions where mask is invalid
+    valid_mask = valid_mask.unsqueeze(1)  # shape [B, 1, H, W]
+    pred_probs = pred_probs * valid_mask
+    gt_onehot = gt_onehot * valid_mask
 
-    # Intersection = sum(pred * gt), Denominator = sum(pred) + sum(gt)
+    # --- Dice computation ---
     intersection = torch.sum(pred_probs * gt_onehot, dim=(2, 3))  # [B, C]
     if squared_pred:
         pred_sum = torch.sum(pred_probs**2, dim=(2, 3))
@@ -234,63 +228,143 @@ def dice_ce_loss(
         gt_sum = torch.sum(gt_onehot, dim=(2, 3))
 
     dice_per_class = (2.0 * intersection + smooth) / (pred_sum + gt_sum + smooth)
-    dice_loss = 1.0 - dice_per_class.mean()  # average over batch & classes
 
-    # Combine
-    return dice_w * dice_loss + (1.0 - dice_w) * CE_loss
+    # --- Apply class weights if provided ---
+    if class_weights is not None:
+        class_weights = class_weights.to(predictions.device).float()
+        class_weights = class_weights / class_weights.sum()  # normalize
+        dice_loss = (
+            1.0 - (dice_per_class * class_weights).sum(dim=1).mean()
+        )  # weighted avg over classes, then mean over batch
+    else:
+        dice_loss = 1.0 - dice_per_class.mean()
+
+    # Weighted combination
+    return dice_w * dice_loss + (1.0 - dice_w) * ce_loss
 
 
-# TODO: needs cleanup
 def dice_ce_mse_loss(
     predictions: torch.Tensor,
     ground_truths: torch.Tensor,
-    class_weights: torch.Tensor = None,
+    class_weights: Optional[torch.Tensor] = None,
     dice_w: float = 0.5,
-    mse_w: float = 0.1,
-    ignore_index: int = 255,
+    mse_w: float = 0.5,
+    ce_w: float = 0.5,
+    ignore_index: Optional[int] = 255,
     smooth: float = 1e-5,
     squared_pred: bool = False,
-):
+) -> torch.Tensor:
     """
-    Combines the Dice+CE loss with an additional MSE loss that captures
-    the ordinal relationship among labels.
+    Compute loss = alpha * dice + beta * ce + gamma * mse,
+    where alpha, beta, gamma are normalized weights derived from dice_w, ce_w, mse_w.
+
+    - If ce_w is None: ce_w = 1 - dice_w (backwards-compatible default).
+    - class_weights (if provided) is applied to CE and to Dice (Dice uses normalized class weights).
     """
-    # First, compute the standard Dice+CE loss
-    loss_dice_ce = dice_ce_loss(
-        predictions,
-        ground_truths,
-        class_weights=class_weights,
-        dice_w=dice_w,
-        ignore_index=ignore_index,
-        smooth=smooth,
-        squared_pred=squared_pred,
-    )
 
-    # Compute the MSE component.
-    # Here we convert the network's output into an expectation over class labels.
-    # Assuming the classes are ordered (0, 1, 2, ...), we compute the expected label.
-    pred_probs = F.softmax(predictions, dim=1)  # [B, C, H, W]
-    num_classes = predictions.shape[1]
+    # --- prepare devices / dtypes / shapes ---
+    device = predictions.device
+    dtype = predictions.dtype
+    B, C, H, W = predictions.shape
 
-    # Create an index tensor with values 0, 1, ..., num_classes-1
-    indices = torch.arange(
-        num_classes, device=predictions.device, dtype=predictions.dtype
-    )
+    # Normalize the three weights so they sum to 1 (so they're comparable)
+    if dice_w < 0 or ce_w < 0 or mse_w < 0:
+        raise ValueError("Weights (dice_w, ce_w, mse_w) must be > 0")
+    w_sum = float(dice_w + ce_w + mse_w)
+    alpha = float(dice_w) / w_sum
+    beta = float(ce_w) / w_sum
+    gamma = float(mse_w) / w_sum
 
-    # Compute the expectation for each pixel: sum_c (c * p(c))
-    pred_expectation = (pred_probs * indices.view(1, -1, 1, 1)).sum(dim=1)  # [B, H, W]
-
-    # Prepare the mask to ignore void labels
-    valid_mask = ground_truths != ignore_index
-
-    # For MSE, only consider valid pixels
-    if valid_mask.sum() > 0:
-        mse_loss = F.mse_loss(
-            pred_expectation[valid_mask],
-            ground_truths[valid_mask].to(pred_expectation.dtype),
-        )
+    # Ensure ground truth is integer type for CE/one-hot
+    if not torch.is_floating_point(ground_truths):
+        # likely long already; keep as is
+        gt_int = ground_truths
     else:
-        mse_loss = torch.tensor(0.0, device=predictions.device)
+        gt_int = ground_truths.long()
 
-    total_loss = (1 - mse_w) * loss_dice_ce + mse_w * mse_loss
-    return total_loss
+    # --- Cross-Entropy term (beta * CE) ---
+    # Move class_weights to device/dtype expected by cross_entropy
+    ce_weight = class_weights.to(device).float() if class_weights is not None else None
+    ce_loss = F.cross_entropy(
+        predictions, gt_int, weight=ce_weight, ignore_index=ignore_index
+    )
+
+    # If alpha == 0 and gamma == 0 => only CE needed (fast path)
+    if alpha == 0.0 and gamma == 0.0:
+        return ce_loss
+
+    # --- Prepare mask and safe GT for Dice and MSE ---
+    if ignore_index is None:
+        valid_mask = torch.ones_like(gt_int, dtype=torch.bool, device=device)
+        gt_safe = gt_int
+    else:
+        valid_mask = gt_int != ignore_index
+        # replace invalid labels with 0 to keep one_hot happy
+        gt_safe = torch.where(valid_mask, gt_int, torch.zeros_like(gt_int))
+
+    # --- Dice term (alpha * Dice) ---
+    if alpha > 0.0:
+        gt_onehot = (
+            F.one_hot(gt_safe, num_classes=C).permute(0, 3, 1, 2).float()
+        )  # [B,C,H,W]
+        pred_probs = F.softmax(predictions, dim=1)
+
+        vm = valid_mask.unsqueeze(1)  # [B,1,H,W]
+        pred_probs_masked = pred_probs * vm
+        gt_onehot_masked = gt_onehot * vm
+
+        intersection = torch.sum(
+            pred_probs_masked * gt_onehot_masked, dim=(2, 3)
+        )  # [B,C]
+        if squared_pred:
+            pred_sum = torch.sum(pred_probs_masked**2, dim=(2, 3))
+            gt_sum = torch.sum(gt_onehot_masked**2, dim=(2, 3))
+        else:
+            pred_sum = torch.sum(pred_probs_masked, dim=(2, 3))
+            gt_sum = torch.sum(gt_onehot_masked, dim=(2, 3))
+
+        dice_per_class = (2.0 * intersection + smooth) / (
+            pred_sum + gt_sum + smooth
+        )  # [B,C]
+
+        if class_weights is not None:
+            cw = class_weights.to(device).float()
+            # avoid division by zero if sum is zero; add tiny epsilon (but class_weights should be >0)
+            cw_sum = cw.sum().item()
+            if cw_sum == 0:
+                normalized_cw = cw
+            else:
+                normalized_cw = cw / cw_sum
+            # weighted over classes, then mean over batch
+            # dice_per_class: [B,C] ; normalized_cw: [C] -> multiply broadcast -> [B,C]
+            dice_score_per_batch = (dice_per_class * normalized_cw.view(1, -1)).sum(
+                dim=1
+            )  # [B]
+            dice_loss = 1.0 - dice_score_per_batch.mean()
+        else:
+            dice_loss = 1.0 - dice_per_class.mean()
+    else:
+        dice_loss = torch.tensor(0.0, device=device, dtype=dtype)
+
+    # --- MSE term (gamma * MSE) ---
+    if gamma > 0.0:
+        pred_probs = F.softmax(predictions, dim=1)  # [B,C,H,W]
+        indices = torch.arange(C, device=device, dtype=dtype)
+        pred_expectation = (pred_probs * indices.view(1, -1, 1, 1)).sum(
+            dim=1
+        )  # [B,H,W]
+
+        # MSE computed only over valid pixels
+        if valid_mask.any().item():
+            gt_for_mse = gt_safe.to(
+                dtype
+            )  # safe because invalids were set to 0 but masked out
+            mse_loss = F.mse_loss(pred_expectation[valid_mask], gt_for_mse[valid_mask])
+        else:
+            mse_loss = torch.tensor(0.0, device=device, dtype=dtype)
+    else:
+        mse_loss = torch.tensor(0.0, device=device, dtype=dtype)
+
+    # --- Combine final losses with normalized weights ---
+    total = alpha * dice_loss + beta * ce_loss + gamma * mse_loss
+    return total

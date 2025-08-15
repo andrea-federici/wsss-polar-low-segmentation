@@ -1,6 +1,9 @@
 defaults:
   - default
+  - override dataset: cancer
+  - override model: segformer
   - override lr_scheduler: redplat
+  - override loss: dice_ce
 
 logger:
   use_env_token: True
@@ -8,4 +11,4 @@ logger:
 
 checkpoints: True
 
-run_tags: ['voc_smp']
+run_tags: ['cancer']

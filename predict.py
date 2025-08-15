@@ -5,6 +5,8 @@ from omegaconf import DictConfig, OmegaConf
 import hydra
 import matplotlib.pyplot as plt
 import cv2
+import numpy as np
+from tqdm import tqdm
 
 sys.path.append("../")
 from sklearn.metrics import jaccard_score
@@ -19,15 +21,19 @@ def run(cfg: DictConfig) -> float:
 
     print(OmegaConf.to_yaml(cfg, resolve=True))
 
+    stage = "val"
+    save_only_pos = True
+    binarize_masks = True
+    top_classes = 2
+
     # Ensure that the dataset specified is supported
-    if cfg.dataset.name not in [
-        utils.constants.VOC_DATASET_NAME,
+    supported_datasets = [
         utils.constants.PL_DATASET_NAME,
-    ]:
+    ]
+    if cfg.dataset.name not in supported_datasets:
         raise ValueError(
             f"Dataset {cfg.dataset.name} is not supported. "
-            f"Supported datasets: {utils.constants.VOC_DATASET_NAME}, "
-            f"{utils.constants.PL_DATASET_NAME}"
+            f"Supported datasets are: {', '.join(supported_datasets)}"
         )
 
     # Ensure that the checkpoint path was specified
@@ -44,8 +50,6 @@ def run(cfg: DictConfig) -> float:
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint does not exist: {checkpoint_path}")
 
-    print(f"Loaded checkpoint: {checkpoint_path}")
-
     # Model
     model = models.utils.model_getter(cfg.model.name, cfg, print_summary=False)
 
@@ -59,7 +63,7 @@ def run(cfg: DictConfig) -> float:
     else:
         scheduler_class = scheduler_kwargs = None
 
-    seg = models.sar_module.Segmentation.load_from_checkpoint(
+    seg = models.custom_module.Segmentation.load_from_checkpoint(
         checkpoint_path,
         model=model,
         num_labels=cfg.dataset.num_labels,
@@ -77,55 +81,18 @@ def run(cfg: DictConfig) -> float:
     model.eval().to("cuda")
 
     # Data module:
-    if cfg.dataset.name == utils.constants.VOC_DATASET_NAME:
-        data_module = data.data_loaders.VOCDataModule(
-            data_dir="data",
-            batch_size=cfg.batch_size,
-            height=cfg.dataset.height,
-            width=cfg.dataset.width,
-            num_workers=cfg.workers,
-        )
-    elif cfg.dataset.name == utils.constants.PL_DATASET_NAME:
-        data_module = data.pl_loader.PLDataModule(
-            image_dir=cfg.dataset.image_dir,
-            mask_dir=cfg.dataset.mask_dir,
-            batch_size=cfg.batch_size,
-            height=cfg.dataset.height,
-            width=cfg.dataset.width,
-            augment=cfg.dataset.augment,
-            num_workers=cfg.workers,
-        )
-    data_module.prepare_data()
-    data_module.setup(stage="val")
-    dl = data_module.val_dataloader()
+    dataloader = _get_dataloader(cfg, stage)
 
     output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
 
+    all_pred = []
+    all_target = []
+    total_loss = 0.0
+    batch_count = 0
+
     with torch.no_grad():
-        for batch_idx, (x, y) in enumerate(dl):
-            # if batch_idx == 0:
-            #     img_path = "data/pl/images/train/03cb6a_20191204T073021_20191204T073211_mos_rgb.png"
-            #     from PIL import Image
-
-            #     img = Image.open(img_path)
-            #     import torchvision.transforms.transforms as transforms
-            #     from torchvision.transforms.functional import pil_to_tensor
-
-            #     img_tens = pil_to_tensor(img)
-
-            #     comp = transforms.Compose(
-            #         [
-            #             transforms.Normalize(
-            #                 mean=[0.2872, 0.2872, 0.4595], std=[0.1806, 0.1806, 0.2621]
-            #             ),
-            #             transforms.ToTensor(),
-            #         ]
-            #     )
-            #     img_tens = comp(img_tens)
-            #     print(img_tens.shape)
-            #     return
-
+        for batch_idx, (x, y) in enumerate(tqdm(dataloader, desc="Doing inference...")):
             x, y = x.to("cuda"), y.to("cuda")
             outputs = model(x)
             outputs = models.utils.handle_outputs(outputs, x, model.nametag)
@@ -134,6 +101,18 @@ def run(cfg: DictConfig) -> float:
             preds = torch.argmax(outputs, dim=1).int()
             target = y.int()
 
+            # Merge all labels < top_classes into background
+            if top_classes > 0:
+                preds = torch.where(
+                    preds >= cfg.dataset.num_labels - top_classes,
+                    preds,
+                    torch.zeros_like(preds),
+                )
+
+            # Convert to binary: background (0) vs. foreground (1+)
+            if binarize_masks:
+                preds = (preds > 0).int()
+
             # Convert logits or soft outputs to probability maps
             # Assuming outputs is logits: apply softmax along the class dimension
             softmax_outputs = torch.softmax(outputs, dim=1)
@@ -141,14 +120,14 @@ def run(cfg: DictConfig) -> float:
             # Optional: Convert probabilities to CPU numpy arrays for CRF processing
             # Process each image in the batch
             refined_preds = []
-            for idx in range(softmax_outputs.shape[0]):
+            for i in range(softmax_outputs.shape[0]):
                 # Get the original image and predicted probability map
-                orig_img = x[idx].cpu().permute(1, 2, 0).numpy()
+                orig_img = x[i].cpu().permute(1, 2, 0).numpy()
                 orig_img = (orig_img - orig_img.min()) / (
                     orig_img.max() - orig_img.min()
                 )
                 prob_map = (
-                    softmax_outputs[idx].cpu().numpy()
+                    softmax_outputs[i].cpu().numpy()
                 )  # shape: (num_classes, H, W)
 
                 # Here, we assume binary segmentation for CRF.
@@ -160,92 +139,81 @@ def run(cfg: DictConfig) -> float:
 
             # Ignore void pixels for metrics only
             mask = target != 255
-            preds_for_metrics = preds[mask].cpu().numpy()
-            target_for_metrics = target[mask].cpu().numpy()
+            preds_for_metrics = preds[mask].flatten().cpu().numpy()
+            target_for_metrics = target[mask].flatten().cpu().numpy()
 
-            mean_iou = jaccard_score(
-                target_for_metrics.flatten(),
-                preds_for_metrics.flatten(),
-                average="macro",
-            )
+            # Accumulate metrics
+            all_pred.append(preds[mask].cpu().numpy().flatten())
+            all_target.append(target[mask].cpu().numpy().flatten())
+            total_loss += loss.item()
+            batch_count += 1
 
             # TODO: use color map from misc.img_logging
             cmap = plt.get_cmap("viridis", cfg.dataset.num_labels)  # VOC -> 21 classes
 
-            for idx in range(preds.shape[0]):
+            for i in range(preds.shape[0]):
                 # Convert image from tensor (CHW) to numpy (HWC) and normalize
-                original_img = x[idx].cpu().permute(1, 2, 0).numpy()
-                original_img = (original_img - original_img.min()) / (
-                    original_img.max() - original_img.min()
-                )
+                img = x[i].cpu().permute(1, 2, 0).numpy()
+                img = (img - img.min()) / (img.max() - img.min())
 
                 # Get predictions
-                pred_mask_original = (
-                    preds[idx].cpu().numpy()
-                )  # original prediction without CRF
-                pred_mask_crf = refined_preds[idx]  # CRF refined mask
-                target_mask = target[idx].cpu().numpy()  # ground truth mask
+                pr_mask = preds[i].cpu().numpy()  # original prediction without CRF
+                pr_mask_crf = refined_preds[i]  # CRF refined mask
+                gt_mask = target[i].cpu().numpy()  # ground truth mask
 
-                if target_mask.sum() == 0:
+                if gt_mask.sum() == 0:
                     gt_label = 0
                 else:
                     gt_label = 1
 
-                # if gt_label == 0:
-                #     continue
+                if save_only_pos and gt_label == 0:
+                    continue
 
                 # Resize masks to match original image size
-                pred_resized_original = cv2.resize(
-                    pred_mask_original,
-                    (original_img.shape[1], original_img.shape[0]),
+                w, h = img.shape[1], img.shape[0]
+                pr_mask = cv2.resize(
+                    pr_mask,
+                    (w, h),
                     interpolation=cv2.INTER_NEAREST,
                 )
-                pred_resized_crf = cv2.resize(
-                    pred_mask_crf,
-                    (original_img.shape[1], original_img.shape[0]),
+                pr_mask_crf = cv2.resize(
+                    pr_mask_crf,
+                    (w, h),
                     interpolation=cv2.INTER_NEAREST,
                 )
-                target_resized = cv2.resize(
-                    target_mask,
-                    (original_img.shape[1], original_img.shape[0]),
+                gt_mask = cv2.resize(
+                    gt_mask,
+                    (w, h),
                     interpolation=cv2.INTER_NEAREST,
                 )
 
                 # Apply colormap (cmap expects values normalized by the number of labels)
-                pred_colored_original = cmap(
-                    pred_resized_original / cfg.dataset.num_labels
-                )[:, :, :3]
-                pred_colored_crf = cmap(pred_resized_crf / cfg.dataset.num_labels)[
-                    :, :, :3
-                ]
-                target_colored = cmap(target_resized / cfg.dataset.num_labels)[:, :, :3]
+                pred_colored_original = cmap(pr_mask / cfg.dataset.num_labels)[:, :, :3]
+                pred_colored_crf = cmap(pr_mask_crf / cfg.dataset.num_labels)[:, :, :3]
+                target_colored = cmap(gt_mask / cfg.dataset.num_labels)[:, :, :3]
 
                 # Override the background (label 0) to use the original image color
-                background_mask_pred = pred_resized_original == 0
-                pred_colored_original[background_mask_pred] = original_img[
-                    background_mask_pred
-                ]
+                background_mask_pred = pr_mask == 0
+                pred_colored_original[background_mask_pred] = img[background_mask_pred]
 
-                background_mask_crf = pred_resized_crf == 0
-                pred_colored_crf[background_mask_crf] = original_img[
-                    background_mask_crf
-                ]
+                background_mask_crf = pr_mask_crf == 0
+                pred_colored_crf[background_mask_crf] = img[background_mask_crf]
 
-                background_mask_target = target_resized == 0
-                target_colored[background_mask_target] = original_img[
-                    background_mask_target
-                ]
+                background_mask_target = gt_mask == 0
+                target_colored[background_mask_target] = img[background_mask_target]
 
                 # Create overlays by blending the original image with the colored masks
-                overlay_original = 0.6 * original_img + 0.4 * pred_colored_original
-                overlay_crf = 0.6 * original_img + 0.4 * pred_colored_crf
-                overlay_target = 0.6 * original_img + 0.4 * target_colored
+                overlay_original = np.clip(
+                    0.6 * img + 0.4 * pred_colored_original, 0.0, 1.0
+                )
+                overlay_crf = np.clip(0.6 * img + 0.4 * pred_colored_crf, 0.0, 1.0)
+                overlay_target = np.clip(0.6 * img + 0.4 * target_colored, 0.0, 1.0)
 
                 # Create a three-panel figure
                 plt.figure(figsize=(14, 4))
 
                 plt.subplot(1, 3, 1)
-                plt.imshow(original_img)
+                plt.imshow(img)
                 plt.title(f"Original Image. GT Label: {gt_label}")
                 plt.axis("off")
 
@@ -270,27 +238,54 @@ def run(cfg: DictConfig) -> float:
                 # Save and close the figure
                 plt.savefig(
                     os.path.join(
-                        output_dir, f"segmentation_comparison_{batch_idx}_{idx}.png"
+                        output_dir, f"segmentation_comparison_{batch_idx}_{i}.png"
                     ),
                     dpi=300,
                     bbox_inches="tight",
                 )
                 plt.close()
-            print(f"Batch {batch_idx}: Loss: {loss.item()}, Mean IoU: " f"{mean_iou}")
 
-            # print(f"y shape: {y.shape}")
-            # print(f"y_pred logits shape: {y_pred.logits.shape}")
-            # print(f"y_pred type: {type(y_pred)}")
+        # Compute overall metrics
+        all_pred = np.concatenate(all_pred)
+        all_target = np.concatenate(all_target)
+        mean_iou = jaccard_score(all_target, all_pred, average="macro")
+        avg_loss = total_loss / batch_count if batch_count else 0.0
+
+        print(f"Final Results - Avg Loss: {avg_loss:.4f}, Mean IoU: {mean_iou:.4f}")
+
+
+def _get_dataloader(cfg: DictConfig, stage: str):
+    supported_stages = ["train", "val", "test"]
+    assert (
+        stage in supported_stages
+    ), f"Stage {stage} not supported. Supported stages: {', '.join(supported_stages)}"
+    if cfg.dataset.name == utils.constants.VOC_DATASET_NAME:
+        data_module = data.data_loaders.VOCDataModule(
+            data_dir="data",
+            batch_size=cfg.batch_size,
+            height=cfg.dataset.height,
+            width=cfg.dataset.width,
+            num_workers=cfg.workers,
+        )
+    elif cfg.dataset.name == utils.constants.PL_DATASET_NAME:
+        data_module = data.data_loader.DataModuleWrapper(
+            image_dir=cfg.dataset.image_dir,
+            mask_dir=cfg.dataset.mask_dir,
+            batch_size=cfg.batch_size,
+            height=cfg.dataset.height,
+            width=cfg.dataset.width,
+            augment=cfg.dataset.augment,
+            num_workers=cfg.workers,
+        )
+    data_module.prepare_data()
+    data_module.setup(stage=stage)
+    if stage == "train":
+        return data_module.train_dataloader()
+    elif stage == "val":
+        return data_module.val_dataloader()
+    else:
+        return data_module.test_dataloader()
 
 
 if __name__ == "__main__":
     run()
-
-# if __name__ == "__main__":
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument('--config-path')
-#     args, unknown = parser.parse_known_args()
-#     checkpoint_path = glob.glob(os.path.abspath(os.path.join(args.config_path, '..', 'checkpoints', '*.ckpt')))[0]
-#     print(checkpoint_path)
-#     assert os.path.exists(checkpoint_path), f'checkpoint does not exist: {checkpoint_path}'
-#     run(checkpoint_path)()

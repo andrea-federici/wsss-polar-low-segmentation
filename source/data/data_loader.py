@@ -2,6 +2,7 @@ import os
 import cv2
 
 from sklearn.model_selection import train_test_split
+import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, Subset
 import torchvision.transforms.functional as TF
@@ -10,11 +11,22 @@ import lightning as pl
 import albumentations as alb
 from albumentations.pytorch import ToTensorV2
 
-from source.data.data_loaders import alb_transform_wrapper
+
+# -------------------------------- #
+#   Helper: Albumentations wrapper
+# -------------------------------- #
+def alb_transform_wrapper(alb_transform):
+    def _transform_fn(pil_img, pil_mask):
+        np_img = np.array(pil_img, dtype=np.float32) / 255.0
+        np_mask = np.array(pil_mask)
+        augmented = alb_transform(image=np_img, mask=np_mask)
+        return augmented["image"], augmented["mask"]
+
+    return _transform_fn
 
 
 # -------------------------------- #
-#   PLDatasetWrapper
+#   Dataset Wrapper
 # -------------------------------- #
 class PLDatasetWrapper(Dataset):
     def __init__(self, image_dir, mask_dir, transform=None):
@@ -54,9 +66,9 @@ class PLDatasetWrapper(Dataset):
 
 
 # -------------------------------- #
-#   PLDataModule
+#   DataModule Wrapper
 # -------------------------------- #
-class PLDataModule(pl.LightningDataModule):
+class DataModuleWrapper(pl.LightningDataModule):
     def __init__(
         self,
         image_dir,

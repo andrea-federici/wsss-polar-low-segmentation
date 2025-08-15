@@ -14,7 +14,7 @@ from neptune.utils import stringify_unsupported
 from dotenv import load_dotenv
 
 from source import models, data, utils
-import source.pl_modules as plm
+import source.lightning_modules as lm
 from source.utils.neptune_utils import _FilterCallback
 
 neptune.internal.operation_processors.async_operation_processor.logger.addFilter(
@@ -31,28 +31,18 @@ def run(cfg: DictConfig) -> float:
     print(OmegaConf.to_yaml(cfg, resolve=True))
 
     # Ensure that the dataset specified is supported
-    if cfg.dataset.name not in [
-        utils.constants.VOC_DATASET_NAME,
+    supported_datasets = [
         utils.constants.PL_DATASET_NAME,
-    ]:
+    ]
+    if cfg.dataset.name not in supported_datasets:
         raise ValueError(
             f"Dataset {cfg.dataset.name} is not supported. "
-            f"Supported datasets: {utils.constants.VOC_DATASET_NAME}, "
-            f"{utils.constants.PL_DATASET_NAME}"
+            f"Supported datasets are: {', '.join(supported_datasets)}"
         )
 
     # Data module:
-    if cfg.dataset.name == utils.constants.VOC_DATASET_NAME:
-        data_module = data.data_loaders.VOCDataModule(
-            data_dir="data",
-            batch_size=cfg.batch_size,
-            height=cfg.dataset.height,
-            width=cfg.dataset.width,
-            augment=cfg.dataset.augment,
-            num_workers=cfg.workers,
-        )
-    elif cfg.dataset.name == utils.constants.PL_DATASET_NAME:
-        data_module = data.pl_loader.PLDataModule(
+    if cfg.dataset.name == utils.constants.PL_DATASET_NAME:
+        data_module = data.data_loader.DataModuleWrapper(
             image_dir=cfg.dataset.image_dir,
             mask_dir=cfg.dataset.mask_dir,
             batch_size=cfg.batch_size,
@@ -75,21 +65,9 @@ def run(cfg: DictConfig) -> float:
     else:
         scheduler_class = scheduler_kwargs = None
 
-    # Lightning module (for VOC dataset)
-    if cfg.dataset.name == utils.constants.VOC_DATASET_NAME:
-        seg = plm.voc_module.Segmentation(
-            model=model,
-            loss_fn=loss_fn,
-            optim_class=getattr(torch.optim, cfg.optimizer.name),
-            optim_kwargs=dict(cfg.optimizer.hparams),
-            scheduler_class=scheduler_class,
-            scheduler_kwargs=scheduler_kwargs,
-            log_lr=cfg.log_lr,
-            log_grad_norm=cfg.log_grad_norm,
-            plot_dict=dict(cfg.plot_preds_at_epoch),
-        )
-    elif cfg.dataset.name == utils.constants.PL_DATASET_NAME:
-        seg = plm.sar_module.Segmentation(
+    # Lightning module
+    if cfg.dataset.name == utils.constants.PL_DATASET_NAME:
+        seg = lm.custom_module.Segmentation(
             model=model,
             num_labels=cfg.dataset.num_labels,
             loss_fn=loss_fn,
@@ -126,9 +104,8 @@ def run(cfg: DictConfig) -> float:
     else:
         raise NotImplementedError("Backend not in ['tensorboard','neptune']")
 
-    # TODO: move to config file
-    monitor = "val_loss"  # "val_f1"
-    mode = "min"  # "max"
+    monitor = cfg.monitor
+    mode = cfg.mode
 
     # Callbacks:
     early_stop_callback = EarlyStopping(

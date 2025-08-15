@@ -3,6 +3,7 @@
 loss:
   name: dice_ce_mse
   hparams:
-    dice_w: 0.3
-    mse_w: 0.3
+    dice_w: 1.0
+    mse_w: 1.0
+    ce_w: 1.0
     class_weight: ${dataset.class_weight}

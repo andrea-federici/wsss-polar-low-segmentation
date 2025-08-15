@@ -1,5 +1,4 @@
 from typing import Optional, Mapping, Type
-import torch
 import lightning as pl
 from lightning.pytorch.utilities import grad_norm
 
@@ -8,14 +7,8 @@ from source import models
 
 class BaseModule(pl.LightningModule):
     """
-    🧱 Base Lightning Module class
+    Base Lightning Module class
     """
-
-    def maybe_log_img_preds(self, batch, y_pred, batch_idx, title):
-        """
-        🖼️ Template function to log image predictions
-        """
-        pass
 
     def __init__(
         self,
@@ -38,7 +31,7 @@ class BaseModule(pl.LightningModule):
 
     def configure_optimizers(self):
         """
-        🛠️ Configure optimizer and scheduler
+        Configure optimizer and scheduler
         """
         cfg = dict()
         optimizer = self.optim_class(self.parameters(), **self.optim_kwargs)
@@ -53,14 +46,14 @@ class BaseModule(pl.LightningModule):
 
     def on_before_optimizer_step(self, optimizer):
         """
-        📏 Log gradients norm
+        Log gradients norm
         """
         if self.log_grad_norm:
             self.log_dict(grad_norm(self, norm_type=2))
 
     def on_train_epoch_start(self) -> None:
         """
-        ⌚ Log learning rate at the start of each epoch
+        Log learning rate at the start of each epoch
         """
         if self.log_lr:
             optimizers = self.optimizers()
@@ -74,7 +67,6 @@ class BaseModule(pl.LightningModule):
                         on_epoch=True,
                         logger=True,
                         prog_bar=False,
-                        batch_size=1,
                         sync_dist=self.sync_dist,
                     )
             else:
@@ -86,7 +78,6 @@ class BaseModule(pl.LightningModule):
                     on_epoch=True,
                     logger=True,
                     prog_bar=False,
-                    batch_size=1,
                     sync_dist=self.sync_dist,
                 )
 
