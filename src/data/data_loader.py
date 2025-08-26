@@ -5,6 +5,7 @@ from sklearn.model_selection import train_test_split
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, Subset
+from torch.utils.data._utils.collate import default_collate
 import torchvision.transforms.functional as TF
 import lightning as pl
 
@@ -41,8 +42,9 @@ class PLDatasetWrapper(Dataset):
         return len(self.images)
 
     def __getitem__(self, idx):
-        img_path = os.path.join(self.image_dir, self.images[idx])
-        mask_path = os.path.join(self.mask_dir, self.images[idx])
+        img_name = self.images[idx]
+        img_path = os.path.join(self.image_dir, img_name)
+        mask_path = os.path.join(self.mask_dir, img_name)
 
         image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -62,7 +64,14 @@ class PLDatasetWrapper(Dataset):
             image = TF.to_tensor(image, dtype=torch.long)
             mask = torch.tensor(mask, dtype=torch.long)
 
-        return image, mask
+        return image, mask, img_name
+
+
+def _collate_fn(batch):
+    imgs, masks, names = zip(*batch)
+    imgs = default_collate(imgs)
+    masks = default_collate(masks)
+    return imgs, masks, list(names)
 
 
 # -------------------------------- #
@@ -96,67 +105,36 @@ class DataModuleWrapper(pl.LightningDataModule):
         self._val_dataset = None
 
     def setup(self, stage: str = None):
-        # ----- Albumentations for training (if self.augment=True) -----
-        if self.augment:
-            train_alb_transform = alb.Compose(
-                [
-                    alb.Resize(self.height, self.width, p=1.0),
-                    alb.ShiftScaleRotate(
-                        shift_limit=0.5,
-                        scale_limit=0.2,
-                        rotate_limit=45,
-                        border_mode=cv2.BORDER_CONSTANT,
-                        value=0,
-                        p=1.0,
-                    ),
-                    alb.HorizontalFlip(p=0.5),
-                    alb.VerticalFlip(p=0.5),
-                    alb.RandomRotate90(p=0.5),
-                    alb.PadIfNeeded(
-                        min_height=self.height,
-                        min_width=self.width,
-                        border_mode=cv2.BORDER_CONSTANT,
-                        value=0,
-                        p=1.0,
-                    ),
-                    alb.RandomCrop(
-                        self.height, self.width, p=1.0
-                    ),  # I don't think this is doing anything since the image size is
-                    # the same as the crop size
-                    ToTensorV2(),
-                ]
-            )
-        else:
-            train_alb_transform = alb.Compose(
-                [
-                    alb.Resize(self.height, self.width, p=1.0),
-                    alb.PadIfNeeded(
-                        min_height=self.height,
-                        min_width=self.width,
-                        border_mode=cv2.BORDER_CONSTANT,
-                        value=0,
-                        p=1.0,
-                    ),
-                    alb.CenterCrop(self.height, self.width, p=1.0),
-                    ToTensorV2(),
-                ]
-            )
-
         # ----- Albumentations for validation -----
         val_alb_transform = alb.Compose(
             [
                 alb.Resize(self.height, self.width, p=1.0),
-                alb.PadIfNeeded(
-                    min_height=self.height,
-                    min_width=self.width,
-                    border_mode=cv2.BORDER_CONSTANT,
-                    value=0,
-                    p=1.0,
-                ),
-                alb.CenterCrop(self.height, self.width, p=1.0),
                 ToTensorV2(),
             ]
         )
+
+        # ----- Albumentations for training (if self.augment=True) -----
+        if self.augment:
+            train_alb_transform = alb.Compose(
+                [
+                    alb.RandomCrop(height=self.height, width=self.width, p=0.5),
+                    alb.ShiftScaleRotate(
+                        shift_limit=0.2,
+                        scale_limit=0.2,
+                        rotate_limit=30,
+                        border_mode=cv2.BORDER_CONSTANT,
+                        fill=0,
+                        p=0.7,
+                    ),
+                    alb.HorizontalFlip(p=0.5),
+                    alb.VerticalFlip(p=0.5),
+                    alb.RandomRotate90(p=0.5),
+                    alb.Resize(self.height, self.width, p=1.0),
+                    ToTensorV2(),
+                ]
+            )
+        else:
+            train_alb_transform = val_alb_transform
 
         # Convert these Albumentations pipelines into functions
         train_transform_fn = alb_transform_wrapper(train_alb_transform)
@@ -183,6 +161,7 @@ class DataModuleWrapper(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
+            collate_fn=_collate_fn,
         )
 
     def val_dataloader(self):
@@ -191,6 +170,7 @@ class DataModuleWrapper(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            collate_fn=_collate_fn,
         )
 
     # TODO: change to actual test dataset?

@@ -5,4 +5,3 @@ loss:
   hparams:
     class_weight: ${dataset.class_weight}
     dice_w: 0.5
-    squared_pred: False

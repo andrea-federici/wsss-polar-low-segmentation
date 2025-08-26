@@ -1,6 +1,6 @@
 import torch
 from torchinfo import summary
-from source import models
+from src import models
 
 
 def model_getter(model_name, cfg, print_summary=True):

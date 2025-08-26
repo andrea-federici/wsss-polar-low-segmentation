@@ -35,16 +35,16 @@ plot_preds_at_epoch:
   every: 5
 
 #### Training params
-batch_size: 16
-epochs: 150
-patience: 30
+batch_size: 16  # This needs to be 16 at most otherwise I run out of CUDA memory.
+epochs: 250
+patience: 40
 limit_train_batches: null
 limit_val_batches: null
 clip_val: 5.0
 checkpoints: False   # save checkpoints while training
 
-monitor: val_loss  # val_f1
-mode: min  # max
+monitor: val_f1  # val_loss
+mode: max  # min
 
 #### Only for prediction
 checkpoint:

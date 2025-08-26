@@ -3,7 +3,7 @@ data/*
 .neptune/
 logs/
 checkpoints/
-output/
+out/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -10,21 +10,22 @@ from tqdm import tqdm
 
 sys.path.append("../")
 from sklearn.metrics import jaccard_score
-from source import models, data, utils
+from src import models, data, utils
 
 utils.misc.register_resolvers()
 utils.misc.reduce_precision()
 
 
-@hydra.main(version_base=None, config_path="config", config_name="predict")
+@hydra.main(version_base=None, config_path="config", config_name="pl_config")
 def run(cfg: DictConfig) -> float:
 
     print(OmegaConf.to_yaml(cfg, resolve=True))
 
-    stage = "val"
+    stage = "train"
+    do_augment = False
     save_only_pos = True
-    binarize_masks = True
-    top_classes = 2
+    binarize_masks = False
+    top_classes = -1  # Use -1 to skip this step
 
     # Ensure that the dataset specified is supported
     supported_datasets = [
@@ -54,7 +55,7 @@ def run(cfg: DictConfig) -> float:
     model = models.utils.model_getter(cfg.model.name, cfg, print_summary=False)
 
     # Loss
-    loss_fn = utils.seg_losses.loss_getter(name=cfg.loss.name, **cfg.loss.hparams)
+    loss = utils.seg_losses.loss_getter(name=cfg.loss.name, **cfg.loss.hparams)
 
     # Optim scheduler
     if cfg.get("lr_scheduler") is not None:
@@ -67,7 +68,7 @@ def run(cfg: DictConfig) -> float:
         checkpoint_path,
         model=model,
         num_labels=cfg.dataset.num_labels,
-        loss_fn=loss_fn,
+        loss=loss,
         optim_class=getattr(torch.optim, cfg.optimizer.name),
         optim_kwargs=dict(cfg.optimizer.hparams),
         scheduler_class=scheduler_class,
@@ -81,9 +82,9 @@ def run(cfg: DictConfig) -> float:
     model.eval().to("cuda")
 
     # Data module:
-    dataloader = _get_dataloader(cfg, stage)
+    dataloader = _get_dataloader(cfg, stage, do_augment=do_augment)
 
-    output_dir = "output"
+    output_dir = "out"
     os.makedirs(output_dir, exist_ok=True)
 
     all_pred = []
@@ -91,13 +92,17 @@ def run(cfg: DictConfig) -> float:
     total_loss = 0.0
     batch_count = 0
 
+    tp = tn = fp = fn = 0
+
     with torch.no_grad():
-        for batch_idx, (x, y) in enumerate(tqdm(dataloader, desc="Doing inference...")):
+        for batch_idx, (x, y, x_names) in enumerate(
+            tqdm(dataloader, desc="Doing inference...")
+        ):
             x, y = x.to("cuda"), y.to("cuda")
             outputs = model(x)
             outputs = models.utils.handle_outputs(outputs, x, model.nametag)
 
-            loss = loss_fn(outputs, y.long())
+            loss = loss(outputs, y.long())
             preds = torch.argmax(outputs, dim=1).int()
             target = y.int()
 
@@ -113,34 +118,8 @@ def run(cfg: DictConfig) -> float:
             if binarize_masks:
                 preds = (preds > 0).int()
 
-            # Convert logits or soft outputs to probability maps
-            # Assuming outputs is logits: apply softmax along the class dimension
-            softmax_outputs = torch.softmax(outputs, dim=1)
-
-            # Optional: Convert probabilities to CPU numpy arrays for CRF processing
-            # Process each image in the batch
-            refined_preds = []
-            for i in range(softmax_outputs.shape[0]):
-                # Get the original image and predicted probability map
-                orig_img = x[i].cpu().permute(1, 2, 0).numpy()
-                orig_img = (orig_img - orig_img.min()) / (
-                    orig_img.max() - orig_img.min()
-                )
-                prob_map = (
-                    softmax_outputs[i].cpu().numpy()
-                )  # shape: (num_classes, H, W)
-
-                # Here, we assume binary segmentation for CRF.
-                # For binary, prob_map[0] is background and prob_map[1] is foreground.
-                refined_mask = utils.crf_utils.refine_mask_with_crf(
-                    orig_img, prob_map, num_classes=cfg.dataset.num_labels, iterations=5
-                )
-                refined_preds.append(refined_mask)
-
             # Ignore void pixels for metrics only
             mask = target != 255
-            preds_for_metrics = preds[mask].flatten().cpu().numpy()
-            target_for_metrics = target[mask].flatten().cpu().numpy()
 
             # Accumulate metrics
             all_pred.append(preds[mask].cpu().numpy().flatten())
@@ -148,8 +127,7 @@ def run(cfg: DictConfig) -> float:
             total_loss += loss.item()
             batch_count += 1
 
-            # TODO: use color map from misc.img_logging
-            cmap = plt.get_cmap("viridis", cfg.dataset.num_labels)  # VOC -> 21 classes
+            cmap = plt.get_cmap("viridis", cfg.dataset.num_labels)
 
             for i in range(preds.shape[0]):
                 # Convert image from tensor (CHW) to numpy (HWC) and normalize
@@ -158,13 +136,27 @@ def run(cfg: DictConfig) -> float:
 
                 # Get predictions
                 pr_mask = preds[i].cpu().numpy()  # original prediction without CRF
-                pr_mask_crf = refined_preds[i]  # CRF refined mask
                 gt_mask = target[i].cpu().numpy()  # ground truth mask
 
                 if gt_mask.sum() == 0:
                     gt_label = 0
                 else:
                     gt_label = 1
+
+                if pr_mask.sum() == 0:
+                    pred_label = 0
+                else:
+                    pred_label = 1
+
+                # Update confusion counters
+                if pred_label == 1 and gt_label == 1:
+                    tp += 1
+                elif pred_label == 0 and gt_label == 0:
+                    tn += 1
+                elif pred_label == 1 and gt_label == 0:
+                    fp += 1
+                elif pred_label == 0 and gt_label == 1:
+                    fn += 1
 
                 if save_only_pos and gt_label == 0:
                     continue
@@ -176,11 +168,6 @@ def run(cfg: DictConfig) -> float:
                     (w, h),
                     interpolation=cv2.INTER_NEAREST,
                 )
-                pr_mask_crf = cv2.resize(
-                    pr_mask_crf,
-                    (w, h),
-                    interpolation=cv2.INTER_NEAREST,
-                )
                 gt_mask = cv2.resize(
                     gt_mask,
                     (w, h),
@@ -189,61 +176,67 @@ def run(cfg: DictConfig) -> float:
 
                 # Apply colormap (cmap expects values normalized by the number of labels)
                 pred_colored_original = cmap(pr_mask / cfg.dataset.num_labels)[:, :, :3]
-                pred_colored_crf = cmap(pr_mask_crf / cfg.dataset.num_labels)[:, :, :3]
                 target_colored = cmap(gt_mask / cfg.dataset.num_labels)[:, :, :3]
 
                 # Override the background (label 0) to use the original image color
                 background_mask_pred = pr_mask == 0
                 pred_colored_original[background_mask_pred] = img[background_mask_pred]
 
-                background_mask_crf = pr_mask_crf == 0
-                pred_colored_crf[background_mask_crf] = img[background_mask_crf]
-
                 background_mask_target = gt_mask == 0
                 target_colored[background_mask_target] = img[background_mask_target]
 
                 # Create overlays by blending the original image with the colored masks
-                overlay_original = np.clip(
+                overlay_pred = np.clip(
                     0.6 * img + 0.4 * pred_colored_original, 0.0, 1.0
                 )
-                overlay_crf = np.clip(0.6 * img + 0.4 * pred_colored_crf, 0.0, 1.0)
                 overlay_target = np.clip(0.6 * img + 0.4 * target_colored, 0.0, 1.0)
 
-                # Create a three-panel figure
+                img_name = x_names[i].removesuffix(".png")
+
+                ### --- PLOT COMPARISON --- ###
                 plt.figure(figsize=(14, 4))
 
+                # Original image
                 plt.subplot(1, 3, 1)
                 plt.imshow(img)
-                plt.title(f"Original Image. GT Label: {gt_label}")
+                plt.title(f"Original Image. GT: {gt_label}")
                 plt.axis("off")
 
-                # Plot original prediction (without CRF)
+                # Prediction
                 plt.subplot(1, 3, 2)
-                plt.imshow(overlay_original)
-                plt.title("Prediction (no post-processing)")
+                plt.imshow(overlay_pred)
+                plt.title("Prediction")
                 plt.axis("off")
 
-                # # Plot CRF refined prediction
-                # plt.subplot(1, 4, 3)
-                # plt.imshow(overlay_crf)
-                # plt.title("CRF Refined Prediction")
-                # plt.axis("off")
-
-                # Plot ground truth mask
+                # Pseudo label
                 plt.subplot(1, 3, 3)
                 plt.imshow(overlay_target)
                 plt.title("Pseudo Label")
                 plt.axis("off")
 
-                # Save and close the figure
+                ### --- SAVE IMAGES --- ###
+                # Save figure
                 plt.savefig(
-                    os.path.join(
-                        output_dir, f"segmentation_comparison_{batch_idx}_{i}.png"
-                    ),
+                    os.path.join(output_dir, f"{img_name}_comparison.png"),
                     dpi=300,
                     bbox_inches="tight",
                 )
                 plt.close()
+
+                additional_dir = os.path.join(output_dir, "additional")
+                os.makedirs(additional_dir, exist_ok=True)
+
+                plt.imsave(
+                    os.path.join(additional_dir, f"{img_name}_original.png"), img
+                )
+                plt.imsave(
+                    os.path.join(additional_dir, f"{img_name}_prediction.png"),
+                    overlay_pred,
+                )
+                plt.imsave(
+                    os.path.join(additional_dir, f"{img_name}_pseudomask.png"),
+                    overlay_target,
+                )
 
         # Compute overall metrics
         all_pred = np.concatenate(all_pred)
@@ -251,30 +244,28 @@ def run(cfg: DictConfig) -> float:
         mean_iou = jaccard_score(all_target, all_pred, average="macro")
         avg_loss = total_loss / batch_count if batch_count else 0.0
 
+        print(f"TP: {tp}, TN: {tn}, FP: {fp}, FN: {fn}")
         print(f"Final Results - Avg Loss: {avg_loss:.4f}, Mean IoU: {mean_iou:.4f}")
 
 
-def _get_dataloader(cfg: DictConfig, stage: str):
+# TODO: do we want to keep this option to override the do_augment flag? Or do we just
+# want to use the one from the config file?
+def _get_dataloader(cfg: DictConfig, stage: str, do_augment: bool = None):
     supported_stages = ["train", "val", "test"]
     assert (
         stage in supported_stages
     ), f"Stage {stage} not supported. Supported stages: {', '.join(supported_stages)}"
-    if cfg.dataset.name == utils.constants.VOC_DATASET_NAME:
-        data_module = data.data_loaders.VOCDataModule(
-            data_dir="data",
-            batch_size=cfg.batch_size,
-            height=cfg.dataset.height,
-            width=cfg.dataset.width,
-            num_workers=cfg.workers,
-        )
-    elif cfg.dataset.name == utils.constants.PL_DATASET_NAME:
+    if cfg.dataset.name in [
+        utils.constants.PL_DATASET_NAME,
+        utils.constants.CANCER_DATASET_NAME,
+    ]:
         data_module = data.data_loader.DataModuleWrapper(
             image_dir=cfg.dataset.image_dir,
             mask_dir=cfg.dataset.mask_dir,
             batch_size=cfg.batch_size,
             height=cfg.dataset.height,
             width=cfg.dataset.width,
-            augment=cfg.dataset.augment,
+            augment=cfg.dataset.augment if do_augment is None else do_augment,
             num_workers=cfg.workers,
         )
     data_module.prepare_data()

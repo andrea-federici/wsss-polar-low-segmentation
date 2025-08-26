@@ -4,5 +4,5 @@ model:
   name: smp
   hparams:
     arch: deeplabv3plus
-    encoder: mit_b3
+    encoder: resnet152
     encoder_weights: imagenet # ssl swsl

@@ -2,7 +2,7 @@ from typing import Optional, Mapping, Type
 import lightning as pl
 from lightning.pytorch.utilities import grad_norm
 
-from source import models
+from src import models
 
 
 class BaseModule(pl.LightningModule):
@@ -28,6 +28,8 @@ class BaseModule(pl.LightningModule):
         self.log_lr = log_lr
         self.log_grad_norm = log_grad_norm
         self.sync_dist = sync_dist
+
+        self.save_hyperparameters()
 
     def configure_optimizers(self):
         """
@@ -91,6 +93,7 @@ class BaseModule(pl.LightningModule):
     def on_train_epoch_end(self):
         f1 = self.train_metrics["train_f1"].compute()
         tp, fp, tn, fn, _ = self.train_metrics["train_scores"].compute()
+        miou = self.train_metrics["train_miou"].compute()
         train_dict = {
             "train_f1": f1,
             "train_tp": tp.float(),
@@ -98,6 +101,7 @@ class BaseModule(pl.LightningModule):
             "train_tn": tn.float(),
             "train_fn": fn.float(),
             "train_iou": tp.float() / (tp + fp + fn).float(),
+            "train_mean_iou": miou,
         }
         self.log_dict(train_dict, on_step=False, on_epoch=True)
         self.train_metrics.reset()
@@ -107,6 +111,7 @@ class BaseModule(pl.LightningModule):
     def on_validation_epoch_end(self):
         f1 = self.val_metrics["val_f1"].compute()
         tp, fp, tn, fn, _ = self.val_metrics["val_scores"].compute()
+        miou = self.val_metrics["val_miou"].compute()
         val_dict = {
             "val_f1": f1,
             "val_tp": tp.float(),
@@ -114,6 +119,7 @@ class BaseModule(pl.LightningModule):
             "val_tn": tn.float(),
             "val_fn": fn.float(),
             "val_iou": tp.float() / (tp + fp + fn).float(),
+            "val_mean_iou": miou,
         }
         self.log_dict(val_dict, on_step=False, on_epoch=True)
         self.val_metrics.reset()

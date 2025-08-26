@@ -13,9 +13,9 @@ import neptune
 from neptune.utils import stringify_unsupported
 from dotenv import load_dotenv
 
-from source import models, data, utils
-import source.lightning_modules as lm
-from source.utils.neptune_utils import _FilterCallback
+from src import models, data, utils
+import src.lightning_modules as lm
+from src.utils.neptune_utils import _FilterCallback
 
 neptune.internal.operation_processors.async_operation_processor.logger.addFilter(
     _FilterCallback()
@@ -56,7 +56,7 @@ def run(cfg: DictConfig) -> float:
     model = models.utils.model_getter(cfg.model.name, cfg, print_summary=False)
 
     # Loss
-    loss_fn = utils.seg_losses.loss_getter(name=cfg.loss.name, **cfg.loss.hparams)
+    loss = utils.seg_losses.loss_getter(name=cfg.loss.name, **cfg.loss.hparams)
 
     # Optim scheduler
     if cfg.get("lr_scheduler") is not None:
@@ -66,11 +66,14 @@ def run(cfg: DictConfig) -> float:
         scheduler_class = scheduler_kwargs = None
 
     # Lightning module
-    if cfg.dataset.name == utils.constants.PL_DATASET_NAME:
+    if cfg.dataset.name in [
+        utils.constants.PL_DATASET_NAME,
+        utils.constants.CANCER_DATASET_NAME,
+    ]:
         seg = lm.custom_module.Segmentation(
             model=model,
             num_labels=cfg.dataset.num_labels,
-            loss_fn=loss_fn,
+            loss=loss,
             optim_class=getattr(torch.optim, cfg.optimizer.name),
             optim_kwargs=dict(cfg.optimizer.hparams),
             scheduler_class=scheduler_class,

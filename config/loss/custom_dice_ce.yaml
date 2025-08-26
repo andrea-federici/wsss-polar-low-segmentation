@@ -1,7 +1,0 @@
-# @package _global_
-
-loss:
-  name: custom_dice_ce
-  hparams:
-    dice_w: 0.5
-    class_weight: ${dataset.class_weight}
