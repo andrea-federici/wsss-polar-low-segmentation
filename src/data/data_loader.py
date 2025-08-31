@@ -1,16 +1,15 @@
 import os
-import cv2
-
-from sklearn.model_selection import train_test_split
-import numpy as np
-import torch
-from torch.utils.data import Dataset, DataLoader, Subset
-from torch.utils.data._utils.collate import default_collate
-import torchvision.transforms.functional as TF
-import lightning as pl
 
 import albumentations as alb
+import cv2
+import lightning as pl
+import numpy as np
+import torch
+import torchvision.transforms.functional as TF
 from albumentations.pytorch import ToTensorV2
+from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data._utils.collate import default_collate
 
 
 # -------------------------------- #
@@ -33,9 +32,7 @@ class PLDatasetWrapper(Dataset):
     def __init__(self, image_dir, mask_dir, transform=None):
         self.image_dir = image_dir
         self.mask_dir = mask_dir
-        self.transform = (
-            transform  # This should be a function(img, mask) -> (img, mask)
-        )
+        self.transform = transform  # This should be a function(img, mask) -> (img, mask)
         self.images = sorted(os.listdir(image_dir))
 
     def __len__(self):
@@ -51,9 +48,7 @@ class PLDatasetWrapper(Dataset):
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
 
         # Ensure mask is resized to match image
-        mask = cv2.resize(
-            mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST
-        )
+        mask = cv2.resize(mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
 
         # Convert 255 to 1 for binary segmentation
         mask[mask == 255] = 1
@@ -117,7 +112,6 @@ class DataModuleWrapper(pl.LightningDataModule):
         if self.augment:
             train_alb_transform = alb.Compose(
                 [
-                    alb.RandomCrop(height=self.height, width=self.width, p=0.5),
                     alb.ShiftScaleRotate(
                         shift_limit=0.2,
                         scale_limit=0.2,
@@ -148,9 +142,7 @@ class DataModuleWrapper(pl.LightningDataModule):
             list(range(len(train_dataset))), test_size=self.val_split, random_state=42
         )
 
-        val_dataset = PLDatasetWrapper(
-            self.image_dir, self.mask_dir, transform=val_transform_fn
-        )
+        val_dataset = PLDatasetWrapper(self.image_dir, self.mask_dir, transform=val_transform_fn)
 
         self._train_dataset = Subset(train_dataset, train_indices)
         self._val_dataset = Subset(val_dataset, val_indices)

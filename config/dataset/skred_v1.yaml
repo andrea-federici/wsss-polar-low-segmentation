@@ -1,9 +1,0 @@
-# @package _global_
-
-dataset:
-  name: skred_v1
-  num_labels: 2
-  channels: [2,3,6,7,8]
-  width: 384
-  height: 384
-  augment: True

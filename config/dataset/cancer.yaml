@@ -3,8 +3,8 @@
 dataset:
   name: cancer
   image_dir: data/cancer/images/train
-  mask_dir: data/cancer/masks
-  num_labels: 5  # Let's say we stopped at iteration 3. num_labels should be set to 5 (background, it_0, it_1, it_2, it_3)
+  mask_dir: data/cancer/masks_it2
+  num_labels: 4  # Let's say we stopped at iteration 3. num_labels should be set to 5 (background, it_0, it_1, it_2, it_3)
   channels: [0, 1, 2]
   width: 480
   height: 480

@@ -1,0 +1,7 @@
+defaults:
+  - cancer_config
+
+dataset:
+  mask_dir: data/cancer/masks_gradcam
+  num_labels: 2
+  class_weight: '${listprod: [1.0], ${dataset.num_labels}}'

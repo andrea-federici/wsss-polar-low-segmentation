@@ -1,4 +1,5 @@
-from typing import Optional, Mapping, Type
+from typing import Mapping, Optional, Type
+
 import lightning as pl
 from lightning.pytorch.utilities import grad_norm
 
@@ -74,7 +75,7 @@ class BaseModule(pl.LightningModule):
             else:
                 lr = optimizers.optimizer.param_groups[0]["lr"]
                 self.log(
-                    f"lr",
+                    "lr",
                     lr,
                     on_step=False,
                     on_epoch=True,
@@ -92,17 +93,26 @@ class BaseModule(pl.LightningModule):
 
     def on_train_epoch_end(self):
         f1 = self.train_metrics["train_f1"].compute()
-        tp, fp, tn, fn, _ = self.train_metrics["train_scores"].compute()
-        miou = self.train_metrics["train_miou"].compute()
+
+        # tp, fp, tn, fn, _ = self.train_metrics["train_scores"].compute()
+        # miou = self.train_metrics["train_miou"].compute()
+        # train_dict = {
+        #     "train_f1": f1,
+        #     "train_tp": tp.float(),
+        #     "train_fp": fp.float(),
+        #     "train_tn": tn.float(),
+        #     "train_fn": fn.float(),
+        #     "train_iou": tp.float() / (tp + fp + fn).float(),
+        #     "train_mean_iou": miou,
+        # }
+
+        iou = self.train_metrics["train_iou"].compute()
+
         train_dict = {
             "train_f1": f1,
-            "train_tp": tp.float(),
-            "train_fp": fp.float(),
-            "train_tn": tn.float(),
-            "train_fn": fn.float(),
-            "train_iou": tp.float() / (tp + fp + fn).float(),
-            "train_mean_iou": miou,
+            "train_iou": iou,
         }
+
         self.log_dict(train_dict, on_step=False, on_epoch=True)
         self.train_metrics.reset()
 
@@ -110,16 +120,25 @@ class BaseModule(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         f1 = self.val_metrics["val_f1"].compute()
-        tp, fp, tn, fn, _ = self.val_metrics["val_scores"].compute()
-        miou = self.val_metrics["val_miou"].compute()
+
+        # tp, fp, tn, fn, _ = self.val_metrics["val_scores"].compute()
+        # miou = self.val_metrics["val_miou"].compute()
+        # val_dict = {
+        #     "val_f1": f1,
+        #     "val_tp": tp.float(),
+        #     "val_fp": fp.float(),
+        #     "val_tn": tn.float(),
+        #     "val_fn": fn.float(),
+        #     "val_iou": tp.float() / (tp + fp + fn).float(),
+        #     "val_mean_iou": miou,
+        # }
+
+        iou = self.val_metrics["val_iou"].compute()
+
         val_dict = {
             "val_f1": f1,
-            "val_tp": tp.float(),
-            "val_fp": fp.float(),
-            "val_tn": tn.float(),
-            "val_fn": fn.float(),
-            "val_iou": tp.float() / (tp + fp + fn).float(),
-            "val_mean_iou": miou,
+            "val_iou": iou,
         }
+
         self.log_dict(val_dict, on_step=False, on_epoch=True)
         self.val_metrics.reset()

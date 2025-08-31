@@ -11,4 +11,4 @@ logger:
 
 checkpoints: True
 
-run_tags: ['polar-lows-seg']
+run_tags: ['pl']

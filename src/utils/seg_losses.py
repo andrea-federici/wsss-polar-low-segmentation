@@ -1,12 +1,8 @@
 import warnings
+from typing import Optional, Sequence, Union
 
 import torch
-from typing import Optional, Union, Sequence
-from monai.losses.dice import (
-    DiceCELoss,
-    DiceFocalLoss,
-    GeneralizedDiceFocalLoss,
-)
+from monai.losses.dice import DiceCELoss, DiceFocalLoss, DiceLoss, GeneralizedDiceFocalLoss
 from monai.losses.tversky import TverskyLoss
 
 
@@ -22,7 +18,7 @@ def loss_getter(
     if name == "dice_ce":
         return DiceCELoss(
             to_onehot_y=True,
-            softmax=True,
+            softmax=True,  # TODO: check that this works also for binary masks. Or in that case do we need to set sigmoid=True?
             weight=class_weight,
             lambda_dice=dice_w,
             lambda_ce=1.0 - dice_w,
@@ -55,5 +51,45 @@ def loss_getter(
             alpha=alpha,
             beta=beta,
         )
+    elif name == "soft_dice_bce":
+        if class_weight is not None:
+            warnings.warn("class_weight is not used in SoftDiceBCELoss and will be ignored.")
+
+        return SoftDiceBCELoss(
+            dice_w=dice_w,
+            pos_weight=None,
+            to_onehot_y=False,
+            sigmoid=True,
+            soft_label=True,
+        )
     else:
         raise ValueError(f"Unsupported loss function: {name}")
+
+
+class SoftDiceBCELoss(torch.nn.Module):
+    def __init__(
+        self,
+        dice_w: float = 0.5,
+        pos_weight: Optional[torch.Tensor] = None,  # Used by BCEWithLogitsLoss
+        to_onehot_y: bool = False,
+        sigmoid: bool = True,  # Set this to True if we are passing logits
+        soft_label: bool = True,
+    ):
+        super().__init__()
+
+        if pos_weight is not None:
+            self.bce = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        else:
+            self.bce = torch.nn.BCEWithLogitsLoss()
+
+        self.dice = DiceLoss(
+            to_onehot_y=to_onehot_y,
+            sigmoid=sigmoid,
+            soft_label=soft_label,
+        )
+        self.dice_w = dice_w
+
+    def forward(self, logits: torch.Tensor, soft_targets: torch.Tensor) -> torch.Tensor:
+        bce_loss = self.bce(logits, soft_targets)
+        dice_loss = self.dice(logits, soft_targets)
+        return (1.0 - self.dice_w) * bce_loss + self.dice_w * dice_loss

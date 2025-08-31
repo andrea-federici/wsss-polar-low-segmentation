@@ -1,25 +1,24 @@
 import os
-
-import torch
-import lightning
-from lightning.pytorch.loggers import TensorBoardLogger
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 import sys
-from omegaconf import DictConfig, OmegaConf
+
 import hydra
+import lightning
+import torch
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from lightning.pytorch.loggers import TensorBoardLogger
+from omegaconf import DictConfig, OmegaConf
 
 sys.path.append("../")
 import neptune
-from neptune.utils import stringify_unsupported
 from dotenv import load_dotenv
+from neptune.utils import stringify_unsupported
 
-from src import models, data, utils
-import src.lightning_modules as lm
+from src import data, models, utils
+from src.lightning_modules.custom_module import Segmentation
+from src.utils.constants import SUPPORTED_DATASETS
 from src.utils.neptune_utils import _FilterCallback
 
-neptune.internal.operation_processors.async_operation_processor.logger.addFilter(
-    _FilterCallback()
-)
+neptune.internal.operation_processors.async_operation_processor.logger.addFilter(_FilterCallback())
 
 utils.misc.register_resolvers()
 utils.misc.reduce_precision()
@@ -27,30 +26,24 @@ utils.misc.reduce_precision()
 
 @hydra.main(version_base=None, config_path="config", config_name="default")
 def run(cfg: DictConfig) -> float:
-
     print(OmegaConf.to_yaml(cfg, resolve=True))
 
-    # Ensure that the dataset specified is supported
-    supported_datasets = [
-        utils.constants.PL_DATASET_NAME,
-    ]
-    if cfg.dataset.name not in supported_datasets:
+    if cfg.dataset.name not in SUPPORTED_DATASETS:
         raise ValueError(
             f"Dataset {cfg.dataset.name} is not supported. "
-            f"Supported datasets are: {', '.join(supported_datasets)}"
+            f"Supported datasets are: {', '.join(SUPPORTED_DATASETS)}"
         )
 
     # Data module:
-    if cfg.dataset.name == utils.constants.PL_DATASET_NAME:
-        data_module = data.data_loader.DataModuleWrapper(
-            image_dir=cfg.dataset.image_dir,
-            mask_dir=cfg.dataset.mask_dir,
-            batch_size=cfg.batch_size,
-            height=cfg.dataset.height,
-            width=cfg.dataset.width,
-            augment=cfg.dataset.augment,
-            num_workers=cfg.workers,
-        )
+    data_module = data.data_loader.DataModuleWrapper(
+        image_dir=cfg.dataset.image_dir,
+        mask_dir=cfg.dataset.mask_dir,
+        batch_size=cfg.batch_size,
+        height=cfg.dataset.height,
+        width=cfg.dataset.width,
+        augment=cfg.dataset.augment,
+        num_workers=cfg.workers,
+    )
 
     # Model
     model = models.utils.model_getter(cfg.model.name, cfg, print_summary=False)
@@ -66,22 +59,18 @@ def run(cfg: DictConfig) -> float:
         scheduler_class = scheduler_kwargs = None
 
     # Lightning module
-    if cfg.dataset.name in [
-        utils.constants.PL_DATASET_NAME,
-        utils.constants.CANCER_DATASET_NAME,
-    ]:
-        seg = lm.custom_module.Segmentation(
-            model=model,
-            num_labels=cfg.dataset.num_labels,
-            loss=loss,
-            optim_class=getattr(torch.optim, cfg.optimizer.name),
-            optim_kwargs=dict(cfg.optimizer.hparams),
-            scheduler_class=scheduler_class,
-            scheduler_kwargs=scheduler_kwargs,
-            log_lr=cfg.log_lr,
-            log_grad_norm=cfg.log_grad_norm,
-            plot_dict=dict(cfg.plot_preds_at_epoch),
-        )
+    seg = Segmentation(
+        model=model,
+        num_labels=cfg.dataset.num_labels,
+        loss=loss,
+        optim_class=getattr(torch.optim, cfg.optimizer.name),
+        optim_kwargs=dict(cfg.optimizer.hparams),
+        scheduler_class=scheduler_class,
+        scheduler_kwargs=scheduler_kwargs,
+        log_lr=cfg.log_lr,
+        log_grad_norm=cfg.log_grad_norm,
+        plot_dict=dict(cfg.plot_preds_at_epoch),
+    )
 
     # Logger:
     if cfg.logger.backend == "tensorboard":
@@ -111,9 +100,7 @@ def run(cfg: DictConfig) -> float:
     mode = cfg.mode
 
     # Callbacks:
-    early_stop_callback = EarlyStopping(
-        monitor=monitor, patience=cfg["patience"], mode=mode
-    )
+    early_stop_callback = EarlyStopping(monitor=monitor, patience=cfg["patience"], mode=mode)
     cb = [early_stop_callback]
 
     if cfg.checkpoints:
