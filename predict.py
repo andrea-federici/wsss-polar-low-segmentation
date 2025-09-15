@@ -18,7 +18,7 @@ from src.lightning_modules.custom_module import Segmentation
 from src.models.utils import handle_outputs, model_getter
 from src.utils.constants import SUPPORTED_DATASETS
 from src.utils.misc import reduce_precision, register_resolvers
-from src.utils.seg_losses import loss_getter
+from src.utils.seg_losses import SoftDiceBCELoss, loss_getter
 
 register_resolvers()
 reduce_precision()
@@ -30,9 +30,10 @@ def run(cfg: DictConfig) -> None:
 
     stage = "val"
     do_augment = False
+    only_metrics = True
     save_only_pos = False
     binarize_masks = True
-    top_classes = 3  # Use -1 to skip this step
+    top_classes = 1  # Use -1 to skip this step
 
     gt_folder = cfg.predict.get("gt_folder") if cfg.get("predict") is not None else None
 
@@ -91,8 +92,9 @@ def run(cfg: DictConfig) -> None:
     # Data module:
     dataloader = _get_dataloader(cfg, stage, do_augment=do_augment)
 
-    output_dir = "out"
-    os.makedirs(output_dir, exist_ok=True)
+    if not only_metrics:
+        output_dir = "out"
+        os.makedirs(output_dir, exist_ok=True)
 
     all_pred = []
     all_target = []
@@ -102,12 +104,15 @@ def run(cfg: DictConfig) -> None:
     tp = tn = fp = fn = 0
 
     def load_gt_mask(mask_folder, img_name):
-        mask_path = os.path.join(mask_folder, img_name.removesuffix(".png") + "_mask.png")
+        mask_path = os.path.join(mask_folder, img_name)
         mask = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
         if mask is None:
             raise FileNotFoundError(f"Mask not found: {mask_path}")
         mask = (mask == 255).astype(np.uint8)
         return mask
+
+    prob_map = torch.tensor([0.0, 0.95, 0.75, 0.3], dtype=torch.float32)
+    prob_map_np = prob_map.numpy()
 
     with torch.no_grad():
         for batch_idx, (x, y, x_names) in enumerate(tqdm(dataloader, desc="Doing inference...")):
@@ -115,9 +120,61 @@ def run(cfg: DictConfig) -> None:
             outputs = model(x)
             outputs = handle_outputs(outputs, x, model.nametag)
 
-            loss = loss_fn(outputs, y.unsqueeze(1).long())
-            preds = torch.argmax(outputs, dim=1).int()
-            target = y.int()
+            # ---- construct targets for loss ----
+            # If loss expects soft targets (binary BCE+soft-dice wrapper), build float soft targets
+            if isinstance(
+                loss_fn, SoftDiceBCELoss
+            ):  # or check a flag: getattr(loss_fn,'expects_soft',False)
+                # ensure y is shape (B,H,W) for indexing
+                if y.ndim == 4 and y.shape[1] == 1:
+                    y_index = y.squeeze(1)
+                else:
+                    y_index = y
+
+                # y_index must be integer indices 0..K
+                y_index = y_index.long()
+
+                # map labels -> soft probabilities and add channel dim (B,1,H,W)
+                soft_targets = prob_map.to(outputs.device)[y_index]  # shape (B,H,W)
+                soft_targets = soft_targets.unsqueeze(1).float()  # shape (B,1,H,W)
+
+                print("outputs.shape:", outputs.shape)  # expect (B,1,H,W)
+                print("soft_targets.shape:", soft_targets.shape)  # currently (B,1,H,W,4)
+                print("prob_map.shape:", prob_map.shape)  # is this (5,) or (5,4) ?
+                print("soft_targets dtype:", soft_targets.dtype)
+
+                # compute loss (loss_fn expects logits + soft_targets floats)
+                loss = loss_fn(outputs, soft_targets)
+
+            else:
+                # multiclass losses expect integer labels or one-hot depending on your loss.
+                # Keep old behaviour but make sure shapes are correct
+                # Many multiclass losses expect shape (B, H, W) long labels, or (B, C, H, W) one-hot.
+                loss = loss_fn(outputs, y.unsqueeze(1).long())
+
+            # ---- produce preds for downstream metrics and optional merging ----
+            if outputs.ndim == 4 and outputs.shape[1] == 1:
+                # binary output: use sigmoid and threshold
+                probs = torch.sigmoid(outputs)  # (B,1,H,W)
+                probs_np = probs.squeeze(1).cpu().numpy()  # (B,H,W), float in [0,1]
+
+                # Map each pixel's probability to the closest entry in prob_map (vectorized)
+                # prob_map_np is defined earlier as numpy array length L (labels 0..L-1)
+                # class_map_np: (B,H,W) with integer labels 0..L-1
+                # distance across labels: |p - prob_map[label]|
+                # NOTE: this handles background (label 0) naturally if prob_map[0] == 0.0
+                d = np.abs(probs_np[..., None] - prob_map_np[None, None, None, :])  # (B,H,W,L)
+                class_map_np = d.argmin(axis=-1).astype(np.int32)  # (B,H,W)
+
+                # Set preds tensor (for metric computations that expect tensor)
+                preds = (
+                    torch.from_numpy(class_map_np).to(outputs.device).int()
+                )  # (B,H,W) int on device
+            else:
+                # multiclass output: use argmax
+                preds = torch.argmax(outputs, dim=1).int()  # (B,H,W)
+
+            target = y.int().squeeze(1) if (y.ndim == 4 and y.shape[1] == 1) else y.int()
 
             # Merge all labels < top_classes into background
             if top_classes > 0:
@@ -174,78 +231,84 @@ def run(cfg: DictConfig) -> None:
                 if save_only_pos and gt_label == 0:
                     continue
 
-                # Convert image from tensor (CHW) to numpy (HWC) and normalize
-                img = x[i].cpu().permute(1, 2, 0).numpy()
-                img = (img - img.min()) / (img.max() - img.min())
+                if not only_metrics:
+                    # Convert image from tensor (CHW) to numpy (HWC) and normalize
+                    img = x[i].cpu().permute(1, 2, 0).numpy()
+                    img = (img - img.min()) / (img.max() - img.min())
 
-                # Resize masks to match original image size
-                w, h = img.shape[1], img.shape[0]
-                pr_mask = cv2.resize(
-                    pr_mask,
-                    (w, h),
-                    interpolation=cv2.INTER_NEAREST,
-                )
-                gt_mask = cv2.resize(
-                    gt_mask,
-                    (w, h),
-                    interpolation=cv2.INTER_NEAREST,
-                )
+                    # Resize masks to match original image size
+                    w, h = img.shape[1], img.shape[0]
+                    pr_mask = cv2.resize(
+                        pr_mask,
+                        (w, h),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                    gt_mask = cv2.resize(
+                        gt_mask,
+                        (w, h),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
 
-                # Apply colormap (cmap expects values normalized by the number of labels)
-                cmap = plt.get_cmap("viridis", cfg.dataset.num_labels)
-                # cmap returns RGBA, we only want RGB
-                pred_colored_original = cmap(pr_mask / cfg.dataset.num_labels)[:, :, :3]
-                target_colored = cmap(gt_mask / cfg.dataset.num_labels)[:, :, :3]
+                    if isinstance(loss_fn, SoftDiceBCELoss):
+                        num_colors = prob_map_np.shape[0]
+                    else:
+                        num_colors = cfg.dataset.num_labels
 
-                # print(f"File name: {x_names[i]}")
-                # print("Shapes:")
-                # print(f"  pr_mask: {pr_mask.shape}")
-                # print(f"  gt_mask: {gt_mask.shape}")
-                # print(f"  img: {img.shape}")
-                # print(f"  pred_colored_original: {pred_colored_original.shape}")
-                # print(f"  target_colored: {target_colored.shape}")
+                    # Apply colormap (cmap expects values normalized by the number of labels)
+                    cmap = plt.get_cmap("viridis", num_colors)
+                    # cmap returns RGBA, we only want RGB
+                    pred_colored_original = cmap(pr_mask / float(num_colors))[:, :, :3]
+                    target_colored = cmap(gt_mask / float(num_colors))[:, :, :3]
 
-                # Override the background (label 0) to use the original image color
-                background_mask_pred = pr_mask == 0
-                pred_colored_original[background_mask_pred] = img[background_mask_pred]
+                    # print(f"File name: {x_names[i]}")
+                    # print("Shapes:")
+                    # print(f"  pr_mask: {pr_mask.shape}")
+                    # print(f"  gt_mask: {gt_mask.shape}")
+                    # print(f"  img: {img.shape}")
+                    # print(f"  pred_colored_original: {pred_colored_original.shape}")
+                    # print(f"  target_colored: {target_colored.shape}")
 
-                background_mask_target = gt_mask == 0
-                target_colored[background_mask_target] = img[background_mask_target]
+                    # Override the background (label 0) to use the original image color
+                    background_mask_pred = pr_mask == 0
+                    pred_colored_original[background_mask_pred] = img[background_mask_pred]
 
-                # Create overlays by blending the original image with the colored masks
-                overlay_pred = np.clip(0.6 * img + 0.4 * pred_colored_original, 0.0, 1.0)
-                overlay_target = np.clip(0.6 * img + 0.4 * target_colored, 0.0, 1.0)
+                    background_mask_target = gt_mask == 0
+                    target_colored[background_mask_target] = img[background_mask_target]
 
-                img_name = x_names[i].removesuffix(".png")
+                    # Create overlays by blending the original image with the colored masks
+                    overlay_pred = np.clip(0.6 * img + 0.4 * pred_colored_original, 0.0, 1.0)
+                    overlay_target = np.clip(0.6 * img + 0.4 * target_colored, 0.0, 1.0)
 
-                ### --- PLOT COMPARISON --- ###
-                plt.figure(figsize=(14, 4))
-                for idx, (im, title) in enumerate(
-                    zip([img, overlay_pred, overlay_target], ["Original", "Prediction", "GT"])
-                ):
-                    plt.subplot(1, 3, idx + 1)
-                    plt.imshow(im)
-                    plt.title(title)
-                    plt.axis("off")
-                plt.savefig(
-                    os.path.join(output_dir, f"{img_name}_comparison.png"),
-                    dpi=300,
-                    bbox_inches="tight",
-                )
-                plt.close()
+                    img_name = x_names[i].removesuffix(".png")
 
-                additional_dir = os.path.join(output_dir, "additional")
-                os.makedirs(additional_dir, exist_ok=True)
+                    ### --- PLOT COMPARISON --- ###
+                    plt.figure(figsize=(14, 4))
+                    for idx, (im, title) in enumerate(
+                        zip([img, overlay_pred, overlay_target], ["Original", "Prediction", "GT"])
+                    ):
+                        plt.subplot(1, 3, idx + 1)
+                        plt.imshow(im)
+                        plt.title(title)
+                        plt.axis("off")
+                    plt.savefig(
+                        os.path.join(output_dir, f"{img_name}_comparison.png"),
+                        dpi=300,
+                        bbox_inches="tight",
+                    )
+                    plt.close()
 
-                plt.imsave(os.path.join(additional_dir, f"{img_name}_original.png"), img)
-                plt.imsave(
-                    os.path.join(additional_dir, f"{img_name}_prediction.png"),
-                    overlay_pred,
-                )
-                plt.imsave(
-                    os.path.join(additional_dir, f"{img_name}_pseudomask.png"),
-                    overlay_target,
-                )
+                    additional_dir = os.path.join(output_dir, "additional")
+                    os.makedirs(additional_dir, exist_ok=True)
+
+                    plt.imsave(os.path.join(additional_dir, f"{img_name}_original.png"), img)
+                    plt.imsave(
+                        os.path.join(additional_dir, f"{img_name}_prediction.png"),
+                        overlay_pred,
+                    )
+                    plt.imsave(
+                        os.path.join(additional_dir, f"{img_name}_pseudomask.png"),
+                        overlay_target,
+                    )
 
         # Compute overall metrics
         all_pred = np.concatenate(all_pred)
@@ -385,46 +448,6 @@ def calc_metrics_detailed(
 
     # If user provided shaped arrays, compute per-image IoU for minority_class (optional separate helper recommended)
     return results
-
-
-# Helper for per-image metrics if you have arrays shaped (N, H, W)
-def per_image_stats_for_class(preds: np.ndarray, targets: np.ndarray, cls: int):
-    """
-    preds, targets must be shaped (N, H, W) or (N, H, W, ...) where flattening last dims to pixels is fine.
-    Returns per-image iou list, dice list, and summary statistics.
-    """
-    preds = np.asarray(preds)
-    targets = np.asarray(targets)
-    if preds.shape != targets.shape:
-        raise ValueError("preds and targets must have same shape")
-
-    N = preds.shape[0]
-    ious = []
-    dices = []
-    for i in range(N):
-        pred_k = (preds[i] == cls).ravel()
-        targ_k = (targets[i] == cls).ravel()
-        inter = np.logical_and(pred_k, targ_k).sum()
-        union = np.logical_or(pred_k, targ_k).sum()
-        denom = pred_k.sum() + targ_k.sum()
-        iou = inter / union if union > 0 else np.nan
-        dice = (2 * inter / denom) if denom > 0 else np.nan
-        ious.append(iou)
-        dices.append(dice)
-    ious_arr = np.array(ious, dtype=float)
-    dices_arr = np.array(dices, dtype=float)
-    summary = {
-        "mean_iou": float(np.nanmean(ious_arr)),
-        "median_iou": float(np.nanmedian(ious_arr[np.isfinite(ious_arr)]))
-        if np.any(np.isfinite(ious_arr))
-        else None,
-        "mean_dice": float(np.nanmean(dices_arr)),
-        "images_with_iou_ge_0.5": int(np.sum(ious_arr >= 0.5)),
-        "images_total": N,
-        "iou_list": ious,
-        "dice_list": dices,
-    }
-    return summary
 
 
 # TODO: do we want to keep this option to override the do_augment flag? Or do we just

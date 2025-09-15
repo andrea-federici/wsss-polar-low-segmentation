@@ -113,12 +113,12 @@ class DataModuleWrapper(pl.LightningDataModule):
             train_alb_transform = alb.Compose(
                 [
                     alb.ShiftScaleRotate(
-                        shift_limit=0.2,
+                        shift_limit=0.4,
                         scale_limit=0.2,
-                        rotate_limit=30,
+                        rotate_limit=45,
                         border_mode=cv2.BORDER_CONSTANT,
                         fill=0,
-                        p=0.7,
+                        p=1.0,
                     ),
                     alb.HorizontalFlip(p=0.5),
                     alb.VerticalFlip(p=0.5),

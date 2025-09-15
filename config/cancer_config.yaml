@@ -3,7 +3,7 @@ defaults:
   - override dataset: cancer
   - override model: segformer
   - override lr_scheduler: redplat
-  - override loss: soft_dice_bce
+  - override loss: dice_ce #
 
 logger:
   use_env_token: True
@@ -12,10 +12,10 @@ logger:
 checkpoints: True
 
 dataset:
-  num_labels: 1
-  class_weight: [0.5, 1.0, 0.75, 0.5]
+  num_labels: 5 #
+  # class_weight: [0.2, 1.0, 0.8, 0.3]
 
 predict:
-  gt_folder: data/cancer/gt_masks
+  gt_folder: data/bus/gt_masks
 
 run_tags: ['cancer']
