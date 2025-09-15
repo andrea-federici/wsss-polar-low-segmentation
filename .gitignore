@@ -1,5 +1,4 @@
-data/*
-!data/.gitkeep
+data/
 .neptune/
 logs/
 checkpoints/
