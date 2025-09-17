@@ -33,15 +33,22 @@ class PLDatasetWrapper(Dataset):
         self.image_dir = image_dir
         self.mask_dir = mask_dir
         self.transform = transform  # This should be a function(img, mask) -> (img, mask)
-        self.images = sorted(os.listdir(image_dir))
+        # self.images = sorted(os.listdir(image_dir))
+        self.masks = sorted(os.listdir(mask_dir))
 
     def __len__(self):
-        return len(self.images)
+        # return len(self.images)
+        return len(self.masks)
 
     def __getitem__(self, idx):
-        img_name = self.images[idx]
+        # img_name = self.images[idx]
+        mask_name = self.masks[idx]
+        img_name = os.path.splitext(mask_name)[0] + ".jpg"
+        # Remove ext, then add .png (this is done so that even if images are saved in .jpg masks
+        # can still be found in .png format)
+        mask_name = os.path.splitext(img_name)[0] + ".png"
         img_path = os.path.join(self.image_dir, img_name)
-        mask_path = os.path.join(self.mask_dir, img_name)
+        mask_path = os.path.join(self.mask_dir, mask_name)
 
         image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)

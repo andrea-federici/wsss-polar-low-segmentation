@@ -1,17 +1,16 @@
 defaults:
   - default
-  - override dataset: cancer
+  - override dataset: voc_binary
   - override model: segformer
   - override lr_scheduler: redplat
-  - override loss: dice_ce #
+  - override loss: dice_ce
 
 logger:
   use_env_token: True
   project: andreaf/polarlows
 
+batch_size: 32
+
 checkpoints: True
 
-predict:
-  gt_folder: data/bus/gt_masks
-
-run_tags: ['cancer']
+run_tags: ['voc']

@@ -1,7 +1,0 @@
-# @package _global_
-
-loss:
-  name: generalized_dice_focal
-  hparams:
-    class_weight: ${dataset.class_weight}
-    dice_w: 0.5

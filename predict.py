@@ -16,9 +16,9 @@ from sklearn.metrics import f1_score, jaccard_score
 from src.data.data_loader import DataModuleWrapper
 from src.lightning_modules.custom_module import Segmentation
 from src.models.utils import handle_outputs, model_getter
-from src.utils.constants import SUPPORTED_DATASETS
+from src.utils.crf_utils import refine_mask_with_crf
 from src.utils.misc import reduce_precision, register_resolvers
-from src.utils.seg_losses import SoftDiceBCELoss, loss_getter
+from src.utils.seg_losses import loss_getter
 
 register_resolvers()
 reduce_precision()
@@ -27,22 +27,20 @@ reduce_precision()
 @hydra.main(version_base=None, config_path="config", config_name="pl_config")
 def run(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg, resolve=True))
+    assert cfg.dataset.num_labels >= 2, (
+        "num_labels must be at least 2 in order for softmax to work. If you have binary masks, "
+        "set num_labels=2."
+    )
 
     stage = "val"
     do_augment = False
-    only_metrics = True
+    only_metrics = False
     save_only_pos = False
-    binarize_masks = True
-    top_classes = 1  # Use -1 to skip this step
+    binarize_masks = False
+    top_classes = -1  # Use -1 to skip this step
+    use_crf = True
 
     gt_folder = cfg.predict.get("gt_folder") if cfg.get("predict") is not None else None
-
-    # Ensure that the dataset specified is supported
-    if cfg.dataset.name not in SUPPORTED_DATASETS:
-        raise ValueError(
-            f"Dataset {cfg.dataset.name} is not supported. "
-            f"Supported datasets are: {', '.join(SUPPORTED_DATASETS)}"
-        )
 
     # Ensure that the checkpoint path was specified
     if not cfg.checkpoint.path:
@@ -111,70 +109,19 @@ def run(cfg: DictConfig) -> None:
         mask = (mask == 255).astype(np.uint8)
         return mask
 
-    prob_map = torch.tensor([0.0, 0.95, 0.75, 0.3], dtype=torch.float32)
-    prob_map_np = prob_map.numpy()
-
     with torch.no_grad():
         for batch_idx, (x, y, x_names) in enumerate(tqdm(dataloader, desc="Doing inference...")):
             x, y = x.to("cuda"), y.to("cuda")
             outputs = model(x)
             outputs = handle_outputs(outputs, x, model.nametag)
 
-            # ---- construct targets for loss ----
-            # If loss expects soft targets (binary BCE+soft-dice wrapper), build float soft targets
-            if isinstance(
-                loss_fn, SoftDiceBCELoss
-            ):  # or check a flag: getattr(loss_fn,'expects_soft',False)
-                # ensure y is shape (B,H,W) for indexing
-                if y.ndim == 4 and y.shape[1] == 1:
-                    y_index = y.squeeze(1)
-                else:
-                    y_index = y
+            # --- Probabilities for CRF (B, C, H, W) ---
+            if use_crf:
+                probs_for_crf = torch.softmax(outputs, dim=1)  # (B,C,H,W)
 
-                # y_index must be integer indices 0..K
-                y_index = y_index.long()
-
-                # map labels -> soft probabilities and add channel dim (B,1,H,W)
-                soft_targets = prob_map.to(outputs.device)[y_index]  # shape (B,H,W)
-                soft_targets = soft_targets.unsqueeze(1).float()  # shape (B,1,H,W)
-
-                print("outputs.shape:", outputs.shape)  # expect (B,1,H,W)
-                print("soft_targets.shape:", soft_targets.shape)  # currently (B,1,H,W,4)
-                print("prob_map.shape:", prob_map.shape)  # is this (5,) or (5,4) ?
-                print("soft_targets dtype:", soft_targets.dtype)
-
-                # compute loss (loss_fn expects logits + soft_targets floats)
-                loss = loss_fn(outputs, soft_targets)
-
-            else:
-                # multiclass losses expect integer labels or one-hot depending on your loss.
-                # Keep old behaviour but make sure shapes are correct
-                # Many multiclass losses expect shape (B, H, W) long labels, or (B, C, H, W) one-hot.
-                loss = loss_fn(outputs, y.unsqueeze(1).long())
-
-            # ---- produce preds for downstream metrics and optional merging ----
-            if outputs.ndim == 4 and outputs.shape[1] == 1:
-                # binary output: use sigmoid and threshold
-                probs = torch.sigmoid(outputs)  # (B,1,H,W)
-                probs_np = probs.squeeze(1).cpu().numpy()  # (B,H,W), float in [0,1]
-
-                # Map each pixel's probability to the closest entry in prob_map (vectorized)
-                # prob_map_np is defined earlier as numpy array length L (labels 0..L-1)
-                # class_map_np: (B,H,W) with integer labels 0..L-1
-                # distance across labels: |p - prob_map[label]|
-                # NOTE: this handles background (label 0) naturally if prob_map[0] == 0.0
-                d = np.abs(probs_np[..., None] - prob_map_np[None, None, None, :])  # (B,H,W,L)
-                class_map_np = d.argmin(axis=-1).astype(np.int32)  # (B,H,W)
-
-                # Set preds tensor (for metric computations that expect tensor)
-                preds = (
-                    torch.from_numpy(class_map_np).to(outputs.device).int()
-                )  # (B,H,W) int on device
-            else:
-                # multiclass output: use argmax
-                preds = torch.argmax(outputs, dim=1).int()  # (B,H,W)
-
-            target = y.int().squeeze(1) if (y.ndim == 4 and y.shape[1] == 1) else y.int()
+            loss = loss_fn(outputs, y.unsqueeze(1).long())
+            preds = torch.argmax(outputs, dim=1).int()  # (B,H,W)
+            target = y.int()
 
             # Merge all labels < top_classes into background
             if top_classes > 0:
@@ -249,24 +196,12 @@ def run(cfg: DictConfig) -> None:
                         interpolation=cv2.INTER_NEAREST,
                     )
 
-                    if isinstance(loss_fn, SoftDiceBCELoss):
-                        num_colors = prob_map_np.shape[0]
-                    else:
-                        num_colors = cfg.dataset.num_labels
-
+                    num_colors = cfg.dataset.num_labels
                     # Apply colormap (cmap expects values normalized by the number of labels)
                     cmap = plt.get_cmap("viridis", num_colors)
                     # cmap returns RGBA, we only want RGB
                     pred_colored_original = cmap(pr_mask / float(num_colors))[:, :, :3]
                     target_colored = cmap(gt_mask / float(num_colors))[:, :, :3]
-
-                    # print(f"File name: {x_names[i]}")
-                    # print("Shapes:")
-                    # print(f"  pr_mask: {pr_mask.shape}")
-                    # print(f"  gt_mask: {gt_mask.shape}")
-                    # print(f"  img: {img.shape}")
-                    # print(f"  pred_colored_original: {pred_colored_original.shape}")
-                    # print(f"  target_colored: {target_colored.shape}")
 
                     # Override the background (label 0) to use the original image color
                     background_mask_pred = pr_mask == 0
@@ -279,19 +214,67 @@ def run(cfg: DictConfig) -> None:
                     overlay_pred = np.clip(0.6 * img + 0.4 * pred_colored_original, 0.0, 1.0)
                     overlay_target = np.clip(0.6 * img + 0.4 * target_colored, 0.0, 1.0)
 
+                    overlay_crf = None
+                    if use_crf:
+                        # Prepare inputs for CRF
+                        # Use the *original image* for the bilateral term (uint8 expected; your function handles floats too)
+                        img_uint = img  # function will normalize if needed
+
+                        # Per-image class probabilities for CRF: (C,H,W) numpy
+                        probs_crf_np = probs_for_crf[i].detach().cpu().numpy()  # (C,H,W)
+                        num_crf_classes = probs_crf_np.shape[0]
+
+                        # Run CRF
+                        refined_mask = refine_mask_with_crf(
+                            image=img_uint,
+                            mask_prob=probs_crf_np,
+                            num_classes=num_crf_classes,
+                            iterations=10,
+                            gaussian_sxy=3,
+                            bilateral_sxy=80,
+                            bilateral_srgb=5,
+                            compat_gaussian=3,
+                            compat_bilateral=10,
+                        )  # (H,W) int labels in [0..C-1]
+
+                        # If you later merge classes / binarize for visualization, mirror that logic
+                        refined_vis = refined_mask.copy()
+                        if top_classes > 0:
+                            refined_vis = np.where(
+                                refined_vis >= cfg.dataset.num_labels - top_classes, refined_vis, 0
+                            )
+                        if binarize_masks:
+                            refined_vis = (refined_vis > 0).astype(np.int32)
+
+                        num_colors = cfg.dataset.num_labels
+                        cmap = plt.get_cmap("viridis", num_colors)
+                        crf_colored = cmap(refined_vis / float(num_colors))[:, :, :3]
+                        background_mask_crf = refined_vis == 0
+                        crf_colored[background_mask_crf] = img[background_mask_crf]
+                        overlay_crf = np.clip(0.6 * img + 0.4 * crf_colored, 0.0, 1.0)
+
                     img_name = x_names[i].removesuffix(".png")
 
-                    ### --- PLOT COMPARISON --- ###
-                    plt.figure(figsize=(14, 4))
-                    for idx, (im, title) in enumerate(
-                        zip([img, overlay_pred, overlay_target], ["Original", "Prediction", "GT"])
-                    ):
-                        plt.subplot(1, 3, idx + 1)
+                    # --- PLOT COMPARISON --- #
+                    panels = [
+                        ("Original", img),
+                        ("Prediction", overlay_pred),
+                        ("GT", overlay_target),
+                    ]
+                    if use_crf and overlay_crf is not None:
+                        panels.append(("Pred + CRF", overlay_crf))
+
+                    plt.figure(figsize=(18 if use_crf else 14, 4))
+                    for idx, (title, im) in enumerate(panels):
+                        plt.subplot(1, len(panels), idx + 1)
                         plt.imshow(im)
                         plt.title(title)
                         plt.axis("off")
+
                     plt.savefig(
-                        os.path.join(output_dir, f"{img_name}_comparison.png"),
+                        os.path.join(
+                            output_dir, f"{img_name}_comparison{'_crf' if use_crf else ''}.png"
+                        ),
                         dpi=300,
                         bbox_inches="tight",
                     )
@@ -309,6 +292,12 @@ def run(cfg: DictConfig) -> None:
                         os.path.join(additional_dir, f"{img_name}_pseudomask.png"),
                         overlay_target,
                     )
+
+                    if use_crf and overlay_crf is not None:
+                        plt.imsave(
+                            os.path.join(additional_dir, f"{img_name}_prediction_crf.png"),
+                            overlay_crf,
+                        )
 
         # Compute overall metrics
         all_pred = np.concatenate(all_pred)
@@ -457,11 +446,6 @@ def _get_dataloader(cfg: DictConfig, stage: str, do_augment: Optional[bool] = No
     if stage not in supported_stages:
         raise ValueError(
             f"Stage {stage} not supported. Supported stages: {', '.join(supported_stages)}"
-        )
-    if cfg.dataset.name not in SUPPORTED_DATASETS:
-        raise ValueError(
-            f"Dataset {cfg.dataset.name} is not supported. "
-            f"Supported datasets are: {', '.join(SUPPORTED_DATASETS)}"
         )
     data_module = DataModuleWrapper(
         image_dir=cfg.dataset.image_dir,

@@ -1,0 +1,12 @@
+# @package _global_
+
+dataset:
+  name: voc_binary
+  image_dir: data/VOC2012/images
+  mask_dir: data/VOC2012/masks
+  num_labels: 2
+  channels: [0, 1, 2]
+  width: 299
+  height: 299
+  augment: True
+  class_weight: '${listprod: [1.0], ${dataset.num_labels}}'

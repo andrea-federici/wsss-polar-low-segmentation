@@ -15,7 +15,6 @@ from neptune.utils import stringify_unsupported
 
 from src import data, models, utils
 from src.lightning_modules.custom_module import Segmentation
-from src.utils.constants import SUPPORTED_DATASETS
 from src.utils.neptune_utils import _FilterCallback
 
 neptune.internal.operation_processors.async_operation_processor.logger.addFilter(_FilterCallback())
@@ -27,12 +26,10 @@ utils.misc.reduce_precision()
 @hydra.main(version_base=None, config_path="config", config_name="default")
 def run(cfg: DictConfig) -> float:
     print(OmegaConf.to_yaml(cfg, resolve=True))
-
-    if cfg.dataset.name not in SUPPORTED_DATASETS:
-        raise ValueError(
-            f"Dataset {cfg.dataset.name} is not supported. "
-            f"Supported datasets are: {', '.join(SUPPORTED_DATASETS)}"
-        )
+    assert cfg.dataset.num_labels >= 2, (
+        "num_labels must be at least 2 in order for softmax to work. If you have binary masks, "
+        "set num_labels=2."
+    )
 
     # Data module:
     data_module = data.data_loader.DataModuleWrapper(
