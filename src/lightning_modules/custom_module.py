@@ -88,6 +88,13 @@ class Segmentation(BaseModule):
     def training_step(self, batch, batch_idx):
         x, y, _ = batch
         y_pred = self.forward(x)
+        if hasattr(self.loss, "update_progress") and self.trainer is not None:
+            total_steps = getattr(self.trainer, "estimated_stepping_batches", None)
+            max_epochs = getattr(self.trainer, "max_epochs", None)
+            if total_steps is not None and max_epochs is not None and total_steps > 0:
+                total_iterations = max(1, int(total_steps * max_epochs))
+                progress = min(1.0, float(self.global_step + 1) / float(total_iterations))
+                self.loss.update_progress(progress)
         loss = self.loss(y_pred, y.unsqueeze(1).long())
         self.train_metrics.update(y_pred.argmax(1).detach().int(), y.int())
 
