@@ -1,12 +1,9 @@
-# @package _global_
+defaults:
+  - base
 
-dataset:
-  name: cancer
-  image_dir: data/bus/images
-  mask_dir: data/bus/012_it3
-  num_labels: 5  # Let's say we stopped at iteration 3. num_labels should be set to 5 (background, it_0, it_1, it_2, it_3)
-  channels: [0, 1, 2]
-  width: 512
-  height: 512
-  augment: True
-  class_weight: '${listprod: [1.0], ${dataset.num_labels}}'
+name: cancer
+image_dir: data/bus/images
+mask_dir: data/bus/gradcam_masks
+num_labels: 5
+width: 512
+height: 512

@@ -2,27 +2,105 @@ import os
 import sys
 from typing import Optional
 
+import albumentations as A
 import cv2
 import hydra
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from albumentations.pytorch import ToTensorV2
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
+from src.data.augmentation import AugParams, get_aug_list
+
 sys.path.append("../")
 from sklearn.metrics import f1_score, jaccard_score
+from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.dataloader import default_collate
 
-from src.data.data_loader import DataModuleWrapper
+from src.data.augmentation import alb_transform_wrapper
+from src.data.data_loader import SegDataModule
 from src.lightning_modules.custom_module import Segmentation
 from src.models.utils import handle_outputs, model_getter
 from src.utils.crf_utils import refine_mask_with_crf
+from src.utils.io import find_by_basename, read_image, read_mask
 from src.utils.misc import reduce_precision, register_resolvers
 from src.utils.seg_losses import loss_getter
 
 register_resolvers()
 reduce_precision()
 
+class TestImageOnlyDataset(Dataset):
+    def __init__(
+        self,
+        image_dir: str,
+        height: int,
+        width: int,
+        image_exts=("png", "jpg", "jpeg"),
+        transform=None,  # <-- this will be alb_transform_wrapper(val_tf)
+    ):
+        super().__init__()
+        if not os.path.isdir(image_dir):
+            raise FileNotFoundError(f"image_dir does not exist: {image_dir}")
+        self.image_dir = image_dir
+        self.h, self.w = height, width
+        self.image_exts = image_exts
+        self.transform = transform
+
+        self._basenames = []
+        for fname in sorted(os.listdir(image_dir)):
+            stem, _ = os.path.splitext(fname)
+            if find_by_basename(image_dir, stem, image_exts):
+                self._basenames.append(stem)
+        if not self._basenames:
+            raise RuntimeError(f"No images found in {image_dir} with extensions {image_exts}.")
+
+    def __len__(self):
+        return len(self._basenames)
+
+    def __getitem__(self, idx):
+        stem = self._basenames[idx]
+        img_path = find_by_basename(self.image_dir, stem, self.image_exts)
+        if img_path is None:
+            raise FileNotFoundError(
+                f"No image found for '{stem}' in {self.image_dir} with exts {self.image_exts}."
+            )
+
+        image = read_image(img_path)  # same helper you use in train/val
+
+        if self.transform is not None:
+            # Mirror your train/val wrapper exactly: supply a dummy mask
+            dummy_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+            image_t, _ = self.transform(image, dummy_mask)  # returns tensors
+        else:
+            image_t = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
+
+        return image_t, os.path.basename(img_path)
+
+def _collate_names_only(batch):
+    imgs, names = zip(*batch)
+    return default_collate(imgs), list(names)
+
+def _get_test_dataloader(cfg: DictConfig):
+    val_tf = A.Compose([A.Resize(cfg.dataset.height, cfg.dataset.width), ToTensorV2()])
+    # Use your wrapper, just like SegDataModule does
+    wrapped = alb_transform_wrapper(val_tf)
+
+    ds = TestImageOnlyDataset(
+        image_dir=cfg.predict.test_image_dir,
+        height=cfg.dataset.height,
+        width=cfg.dataset.width,
+        transform=wrapped,
+    )
+    return DataLoader(
+        ds,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.workers,
+        collate_fn=lambda batch: (default_collate([b[0] for b in batch]),
+                                  [b[1] for b in batch]),
+    )
 
 @hydra.main(version_base=None, config_path="config", config_name="pl_config")
 def run(cfg: DictConfig) -> None:
@@ -35,12 +113,19 @@ def run(cfg: DictConfig) -> None:
     stage = "val"
     do_augment = False
     only_metrics = False
-    save_only_pos = False
-    binarize_masks = False
+    save_only_pos = True
+    binarize_masks = True
     top_classes = -1  # Use -1 to skip this step
     use_crf = True
 
-    gt_folder = cfg.predict.get("gt_folder") if cfg.get("predict") is not None else None
+    if cfg.get("predict") is not None:
+        gt_folder = cfg.predict.get("gt_folder", None)
+        allow_mask_skip = cfg.predict.get("allow_mask_skip", False)
+    else:
+        gt_folder = None
+
+    if stage == "test" and not gt_folder:
+        raise ValueError("For stage='test', cfg.predict.gt_folder is required.")
 
     # Ensure that the checkpoint path was specified
     if not cfg.checkpoint.path:
@@ -88,7 +173,10 @@ def run(cfg: DictConfig) -> None:
     model.eval().to("cuda")
 
     # Data module:
-    dataloader = _get_dataloader(cfg, stage, do_augment=do_augment)
+    if stage == "test":
+        dataloader = _get_test_dataloader(cfg)
+    else:
+        dataloader = _get_dataloader(cfg, stage, do_augment=do_augment)
 
     if not only_metrics:
         output_dir = "out"
@@ -101,17 +189,32 @@ def run(cfg: DictConfig) -> None:
 
     tp = tn = fp = fn = 0
 
-    def load_gt_mask(mask_folder, img_name):
-        mask_path = os.path.join(mask_folder, img_name)
-        mask = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
-        if mask is None:
+    def load_gt_mask(mask_folder, img_name) -> Optional[np.ndarray]:
+        stem = os.path.splitext(img_name)[0]
+        mask_path = find_by_basename(mask_folder, stem, exts=["png", "jpg", "jpeg"])
+        if mask_path is None:
+            if allow_mask_skip:
+                return None
             raise FileNotFoundError(f"Mask not found: {mask_path}")
-        mask = (mask == 255).astype(np.uint8)
-        return mask
+        m = read_mask(mask_path)
+
+        # --- Normalize binary masks: 0/255 -> 0/1 (and any positive -> 1) ---
+        if cfg.dataset.name == "cancer":
+            # Ensure integer type and map strictly to {0,1}
+            m = (m.astype(np.int64) > 0).astype(np.int64)
+
+        return m
 
     with torch.no_grad():
-        for batch_idx, (x, y, x_names) in enumerate(tqdm(dataloader, desc="Doing inference...")):
-            x, y = x.to("cuda"), y.to("cuda")
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Doing inference...")):
+            if stage == "test":
+                x, x_names = batch
+                y = None
+            else:
+                x, y, x_names = batch
+            x = x.to("cuda")
+            if y is not None:
+                y = y.to("cuda")
             outputs = model(x)
             outputs = handle_outputs(outputs, x, model.nametag)
 
@@ -119,9 +222,13 @@ def run(cfg: DictConfig) -> None:
             if use_crf:
                 probs_for_crf = torch.softmax(outputs, dim=1)  # (B,C,H,W)
 
-            loss = loss_fn(outputs, y.unsqueeze(1).long())
+            if y is not None:  # train/val only
+                loss = loss_fn(outputs, y.unsqueeze(1).long())
+                total_loss += loss.item()
+                batch_count += 1
+
             preds = torch.argmax(outputs, dim=1).int()  # (B,H,W)
-            target = y.int()
+            target = y.int() if y is not None else None
 
             # Merge all labels < top_classes into background
             if top_classes > 0:
@@ -135,22 +242,22 @@ def run(cfg: DictConfig) -> None:
             if binarize_masks:
                 preds = (preds > 0).int()
 
-            total_loss += loss.item()
-            batch_count += 1
-
             for i in range(preds.shape[0]):
                 # Get predictions
                 pr_mask = preds[i].cpu().numpy()  # original prediction without CRF
 
+                img_name = os.path.splitext(x_names[i])[0]
+
                 if gt_folder is not None:
                     gt_mask = load_gt_mask(gt_folder, x_names[i])
+                    if gt_mask is None:
+                        continue
                     gt_mask = cv2.resize(
-                        gt_mask,
-                        (pr_mask.shape[1], pr_mask.shape[0]),
-                        interpolation=cv2.INTER_NEAREST,
+                        gt_mask, (pr_mask.shape[1], pr_mask.shape[0]), interpolation=cv2.INTER_NEAREST
                     )
                 else:
-                    gt_mask = target[i].cpu().numpy()  # ground truth mask
+                    gt_mask = target[i].cpu().numpy()
+
 
                 all_pred.append(pr_mask.flatten())
                 all_target.append(gt_mask.flatten())
@@ -262,7 +369,7 @@ def run(cfg: DictConfig) -> None:
                         ("GT", overlay_target),
                     ]
                     if use_crf and overlay_crf is not None:
-                        panels.append(("Pred + CRF", overlay_crf))
+                        panels.insert(2, ("Pred + CRF", overlay_crf))
 
                     plt.figure(figsize=(18 if use_crf else 14, 4))
                     for idx, (title, im) in enumerate(panels):
@@ -302,7 +409,7 @@ def run(cfg: DictConfig) -> None:
         # Compute overall metrics
         all_pred = np.concatenate(all_pred)
         all_target = np.concatenate(all_target)
-        avg_loss = total_loss / batch_count if batch_count else 0.0
+        avg_loss = (total_loss / batch_count) if batch_count > 0 else 0.0
         calc_metrics_detailed(
             all_pred,
             all_target,
@@ -447,13 +554,19 @@ def _get_dataloader(cfg: DictConfig, stage: str, do_augment: Optional[bool] = No
         raise ValueError(
             f"Stage {stage} not supported. Supported stages: {', '.join(supported_stages)}"
         )
-    data_module = DataModuleWrapper(
+    
+    if cfg.dataset.get("aug_params") is not None:
+        aug_list = get_aug_list(AugParams(**cfg.dataset.aug_params)) if do_augment else None
+    else:
+        aug_list = None
+    data_module = SegDataModule(
         image_dir=cfg.dataset.image_dir,
         mask_dir=cfg.dataset.mask_dir,
         batch_size=cfg.batch_size,
         height=cfg.dataset.height,
         width=cfg.dataset.width,
         augment=cfg.dataset.augment if do_augment is None else do_augment,
+        aug_list=aug_list,
         num_workers=cfg.workers,
     )
     data_module.prepare_data()

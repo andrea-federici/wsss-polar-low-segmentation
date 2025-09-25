@@ -8,19 +8,24 @@ from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
 from omegaconf import DictConfig, OmegaConf
 
+from src.models.utils import model_getter
+from src.utils.misc import find_devices, reduce_precision, register_resolvers
+from src.utils.seg_losses import loss_getter
+
 sys.path.append("../")
 import neptune
 from dotenv import load_dotenv
 from neptune.utils import stringify_unsupported
 
-from src import data, models, utils
+from src.data.augmentation import AugParams, get_aug_list
+from src.data.data_loader import SegDataModule
 from src.lightning_modules.custom_module import Segmentation
-from src.utils.neptune_utils import _FilterCallback
+from src.utils.neptune_utils import NeptuneLogger, _FilterCallback
 
 neptune.internal.operation_processors.async_operation_processor.logger.addFilter(_FilterCallback())
 
-utils.misc.register_resolvers()
-utils.misc.reduce_precision()
+register_resolvers()
+reduce_precision()
 
 
 @hydra.main(version_base=None, config_path="config", config_name="default")
@@ -31,22 +36,23 @@ def run(cfg: DictConfig) -> float:
         "set num_labels=2."
     )
 
-    # Data module:
-    data_module = data.data_loader.DataModuleWrapper(
+    aug_list = get_aug_list(AugParams(**cfg.dataset.aug_params)) if cfg.dataset.augment else None
+    data_module = SegDataModule(
         image_dir=cfg.dataset.image_dir,
         mask_dir=cfg.dataset.mask_dir,
         batch_size=cfg.batch_size,
         height=cfg.dataset.height,
         width=cfg.dataset.width,
         augment=cfg.dataset.augment,
+        aug_list=aug_list,
         num_workers=cfg.workers,
     )
 
     # Model
-    model = models.utils.model_getter(cfg.model.name, cfg, print_summary=False)
+    model = model_getter(cfg.model.name, cfg, print_summary=False)
 
     # Loss
-    loss = utils.seg_losses.loss_getter(name=cfg.loss.name, **cfg.loss.hparams)
+    loss = loss_getter(name=cfg.loss.name, **cfg.loss.hparams)
 
     # Optim scheduler
     if cfg.get("lr_scheduler") is not None:
@@ -80,7 +86,7 @@ def run(cfg: DictConfig) -> float:
         else:
             neptune_api_token = None
 
-        logger = utils.neptune_utils.NeptuneLogger(
+        logger = NeptuneLogger(
             api_key=neptune_api_token,
             project_name=cfg.logger.project,
             save_dir=cfg.logger.logdir,
@@ -114,7 +120,7 @@ def run(cfg: DictConfig) -> float:
     trainer = lightning.Trainer(
         logger=logger,
         callbacks=cb,
-        devices=utils.misc.find_devices(1),
+        devices=find_devices(1),
         max_epochs=cfg.epochs,
         limit_train_batches=cfg.limit_train_batches,
         limit_val_batches=cfg.limit_val_batches,

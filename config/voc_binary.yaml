@@ -14,3 +14,7 @@ batch_size: 32
 checkpoints: True
 
 run_tags: ['voc']
+
+predict:
+  gt_folder: data/voc_binary/gt_masks
+  allow_mask_skip: True

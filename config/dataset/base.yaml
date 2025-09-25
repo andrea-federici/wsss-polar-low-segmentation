@@ -1,0 +1,13 @@
+num_labels: 2  # If we stopped at iteration n, this should be set to n+2.
+channels: [0, 1, 2]
+augment: True
+aug_params:
+  shift_limit: 0.4
+  scale_limit: 0.2
+  rotate_limit: 20
+  fill: 0
+  fill_mask: 0
+  hflip_p: 0.5
+  vflip_p: 0.5
+  r90_p: 0.5
+class_weight: '${listprod: [1.0], ${dataset.num_labels}}'

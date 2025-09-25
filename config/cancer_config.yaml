@@ -12,6 +12,8 @@ logger:
 checkpoints: True
 
 predict:
+  stage: test
+  test_image_dir: data/bus/test_images
   gt_folder: data/bus/gt_masks
 
 run_tags: ['cancer']
