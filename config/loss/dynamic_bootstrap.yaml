@@ -1,0 +1,14 @@
+# @package _global_
+
+loss:
+  name: dynamic_bootstrap
+  hparams:
+    num_classes: ${dataset.num_labels}
+    dice_weight: 0.5
+    background_trust: 0.8
+    min_positive_trust: 0.2
+    bootstrap_start: 0.05
+    bootstrap_end: 0.6
+    bootstrap_initial_factor: 0.0
+    bootstrap_final_factor: 1.0
+    schedule_power: 1.0
