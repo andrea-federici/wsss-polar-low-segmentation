@@ -7,3 +7,8 @@ mask_dir: data/voc_binary/masks
 num_labels: 2
 width: 299
 height: 299
+# class_weight: [0.1, 0.45, 0.8, 0.9, 1.0]
+
+aug_params:
+  vflip_p: 0.0
+  r90_p: 0.0

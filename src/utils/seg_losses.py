@@ -195,6 +195,8 @@ class DynamicBootstrappedDiceCELoss(torch.nn.Module):
         lambda_map = lambda_map.clamp(0.0, 1.0)
         lambda_map = lambda_map.unsqueeze(1)
 
+        probs = probs.detach()
+
         mixed_target = (1.0 - lambda_map) * one_hot.to(device=logits.device) + lambda_map * probs
 
         ce_loss = -(mixed_target * log_probs).sum(dim=1).mean()
@@ -233,6 +235,7 @@ def loss_getter(
     if name == "dice_ce":
         try:
             from monai.losses.dice import DiceCELoss  # type: ignore
+            print(f"Using Monai Dice Loss. Using class weights: {class_weight}")
 
             return DiceCELoss(
                 to_onehot_y=True,

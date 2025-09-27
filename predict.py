@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import albumentations as A
 import cv2
@@ -110,13 +110,13 @@ def run(cfg: DictConfig) -> None:
         "set num_labels=2."
     )
 
-    stage = "val"
+    stage = "test"
     do_augment = False
-    only_metrics = False
+    only_metrics = True
     save_only_pos = True
     binarize_masks = True
     top_classes = -1  # Use -1 to skip this step
-    use_crf = True
+    use_crf = False
 
     if cfg.get("predict") is not None:
         gt_folder = cfg.predict.get("gt_folder", None)
@@ -414,135 +414,111 @@ def run(cfg: DictConfig) -> None:
             all_pred,
             all_target,
             avg_loss,
-            tp=tp,
-            tn=tn,
-            fp=fp,
-            fn=fn,
             num_labels=cfg.dataset.num_labels if not binarize_masks else 2,
-            verbose=True,
         )
+
 
 
 def calc_metrics_detailed(
     all_pred: np.ndarray,
     all_target: np.ndarray,
     avg_loss: float,
-    tp: int,
-    tn: int,
-    fp: int,
-    fn: int,
     num_labels: int,
-    verbose: bool = True,
-) -> dict:
-    """Return detailed per-class + per-image metrics. Expects integer labels 0..num_labels-1."""
-    if verbose:
-        print("Calculating detailed metrics...")
+) -> Dict[str, Any]:
+    """
+    Compute per-class IoU, Dice, Precision, Recall (+ macro IoU/Dice and accuracy).
+    Always prints a summary. Expects integer labels in 0..num_labels-1.
 
-    all_pred = np.asarray(all_pred).ravel()
-    all_target = np.asarray(all_target).ravel()
+    Policy:
+    - If a class has no union (absent in both pred & target), its IoU/Dice are None.
+    - Macro IoU/Dice ignore classes with None to avoid skew.
+    - Printed IoU/Dice/Precision/Recall are shown as percentages with 2 decimals.
+    """
+    print("Calculating detailed metrics...")
 
-    if all_pred.shape != all_target.shape:
+    pred = np.asarray(all_pred)
+    targ = np.asarray(all_target)
+
+    if pred.shape != targ.shape:
         raise ValueError("all_pred and all_target must have the same shape.")
 
-    results = {}
-    # Basic global metrics (safe wrappers)
-    try:
-        mean_iou = jaccard_score(
-            all_target, all_pred, average="macro", labels=list(range(num_labels))
-        )
-    except Exception:
-        # fallback to manual per-class IoU mean (ignore classes with no union)
-        ious = []
-        for k in range(num_labels):
-            pred_k = all_pred == k
-            targ_k = all_target == k
-            inter = np.logical_and(pred_k, targ_k).sum()
-            union = np.logical_or(pred_k, targ_k).sum()
-            if union == 0:
-                ious.append(np.nan)
-            else:
-                ious.append(inter / union)
-        mean_iou = float(np.nanmean(ious))
+    flat_pred = pred.ravel()
+    flat_targ = targ.ravel()
 
-    results["mean_iou"] = float(mean_iou)
-    results["avg_loss"] = float(avg_loss)
-    results.update({"tp": int(tp), "tn": int(tn), "fp": int(fp), "fn": int(fn)})
+    # Basic label sanity checks
+    if flat_pred.min(initial=0) < 0 or flat_targ.min(initial=0) < 0:
+        raise ValueError("Labels must be non-negative integers.")
+    if flat_pred.max(initial=0) >= num_labels or flat_targ.max(initial=0) >= num_labels:
+        raise ValueError("Found labels outside 0..num_labels-1. Adjust num_labels or remap labels.")
 
-    # Per-class counters and metrics
-    per_class = {}
+    def _fmt_pct(x):
+        return "N/A" if x is None else f"{x * 100:.2f}%"
+
+    results: Dict[str, Any] = {"avg_loss": float(avg_loss)}
+
+    per_class: Dict[int, Dict[str, Any]] = {}
+    iou_vals, dice_vals = [], []
+
     for k in range(num_labels):
-        pred_k = all_pred == k
-        targ_k = all_target == k
+        pred_k = (flat_pred == k)
+        targ_k = (flat_targ == k)
 
         tp_k = int(np.logical_and(pred_k, targ_k).sum())
-        fp_k = int(np.logical_and(pred_k, np.logical_not(targ_k)).sum())
-        fn_k = int(np.logical_and(np.logical_not(pred_k), targ_k).sum())
-        tn_k = int(np.logical_and(np.logical_not(pred_k), np.logical_not(targ_k)).sum())
+        fp_k = int(np.logical_and(pred_k, ~targ_k).sum())
+        fn_k = int(np.logical_and(~pred_k, targ_k).sum())
+        tn_k = int(np.logical_and(~pred_k, ~targ_k).sum())
 
-        # Precision / Recall / F1 (handle zero division)
-        prec_k = tp_k / (tp_k + fp_k) if (tp_k + fp_k) > 0 else 0.0
-        rec_k = tp_k / (tp_k + fn_k) if (tp_k + fn_k) > 0 else 0.0
-        f1_k = (2 * prec_k * rec_k) / (prec_k + rec_k) if (prec_k + rec_k) > 0 else 0.0
+        # Precision / Recall (safe for zero-division)
+        precision = tp_k / (tp_k + fp_k) if (tp_k + fp_k) > 0 else 0.0
+        recall    = tp_k / (tp_k + fn_k) if (tp_k + fn_k) > 0 else 0.0
 
         # Dice and IoU
-        denom = pred_k.sum() + targ_k.sum()
-        dice_k = (2.0 * tp_k / denom) if denom > 0 else np.nan
-        union = np.logical_or(pred_k, targ_k).sum()
-        iou_k = (tp_k / union) if union > 0 else np.nan
+        denom = int(pred_k.sum()) + int(targ_k.sum())  # = 2TP + FP + FN
+        dice = (2.0 * tp_k / denom) if denom > 0 else None
+        union = int(np.logical_or(pred_k, targ_k).sum())
+        iou  = (tp_k / union) if union > 0 else None
+
+        if iou is not None:  iou_vals.append(iou)
+        if dice is not None: dice_vals.append(dice)
 
         per_class[k] = {
-            "tp": tp_k,
-            "fp": fp_k,
-            "fn": fn_k,
-            "tn": tn_k,
-            "precision": float(prec_k),
-            "recall": float(rec_k),
-            "f1": float(f1_k),
-            "dice": (float(dice_k) if not np.isnan(dice_k) else None),
-            "iou": (float(iou_k) if not np.isnan(iou_k) else None),
+            "tp": tp_k, "fp": fp_k, "fn": fn_k, "tn": tn_k,
+            "precision": float(precision),
+            "recall": float(recall),
+            "dice": (float(dice) if dice is not None else None),
+            "iou":  (float(iou)  if iou  is not None else None),
             "support": int(targ_k.sum()),
             "pred_count": int(pred_k.sum()),
         }
 
+    # Macro metrics (ignore classes with no union)
+    mean_iou   = float(np.mean(iou_vals))  if iou_vals  else 0.0
+    macro_dice = float(np.mean(dice_vals)) if dice_vals else 0.0
+    accuracy   = float(np.mean(flat_pred == flat_targ)) if flat_pred.size else 0.0
+
+    results["mean_iou"] = mean_iou
+    results["macro_dice"] = macro_dice
+    results["accuracy"] = accuracy
     results["per_class"] = per_class
+    results["per_image"] = {}  # placeholder for future per-image stats
 
-    # Macro / Micro F1 using sklearn (safe)
-    try:
-        results["macro_f1"] = float(
-            f1_score(all_target, all_pred, average="macro", zero_division=0)
+    # Always print (percentages with 2 decimals for IoU/Dice/Precision/Recall)
+    print("--- Summary ---")
+    print(f"Avg Loss: {avg_loss:.6f}")
+    print(f"Accuracy: {_fmt_pct(accuracy)}")
+    print(f"Mean IoU (macro): {_fmt_pct(mean_iou)}")
+    print(f"Macro Dice: {_fmt_pct(macro_dice)}")
+    for k, d in per_class.items():
+        iou_str   = _fmt_pct(d["iou"])
+        dice_str  = _fmt_pct(d["dice"])
+        prec_str  = _fmt_pct(d["precision"])
+        recall_str= _fmt_pct(d["recall"])
+        print(
+            f"Class {k}: support={d['support']}, pred_count={d['pred_count']}, "
+            f"TP={d['tp']}, FP={d['fp']}, FN={d['fn']}, "
+            f"IoU={iou_str}, Dice={dice_str}, Precision={prec_str}, Recall={recall_str}"
         )
-        results["micro_f1"] = float(
-            f1_score(all_target, all_pred, average="micro", zero_division=0)
-        )
-    except Exception:
-        results["macro_f1"] = None
-        results["micro_f1"] = None
 
-    # Macro dice (mean of per-class dice ignoring None)
-    dice_vals = [v["dice"] for v in per_class.values() if v["dice"] is not None]
-    results["macro_dice"] = float(np.nanmean(dice_vals)) if len(dice_vals) else 0.0
-
-    # Per-image IoU/Dice for minority class: give distribution (useful to find whether failures are global or a few bad images)
-    # This requires having predictions/targets per image. We only have flattened arrays here,
-    # so to compute per-image metrics you should pass a list/array of per-image preds/targets instead.
-    # We'll provide a helper below; here we compute overall per-image-like approximations only if shapes are provided as (N, H, W).
-    # So we return an empty list for per_image unless the caller supplied shaped arrays (not flattened).
-    results["per_image"] = {}
-
-    if verbose:
-        print("--- Summary ---")
-        print(f"TP: {tp}, TN: {tn}, FP: {fp}, FN: {fn}")
-        print(f"Avg Loss: {results['avg_loss']:.6f}")
-        print(f"Mean IoU (macro): {results['mean_iou']:.6f}")
-        print(f"Macro Dice: {results['macro_dice']:.6f}")
-        print(f"Macro F1: {results['macro_f1']:.6f}, Micro F1: {results['micro_f1']:.6f}")
-        for k, d in per_class.items():
-            dice_str = "nan" if d["dice"] is None else f"{d['dice']:.4f}"
-            print(
-                f"Class {k}: support={d['support']}, pred_count={d['pred_count']}, TP={d['tp']}, FP={d['fp']}, FN={d['fn']}, Dice={dice_str}, F1={d['f1']:.4f}"
-            )
-
-    # If user provided shaped arrays, compute per-image IoU for minority_class (optional separate helper recommended)
     return results
 
 

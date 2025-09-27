@@ -4,7 +4,6 @@ loss:
   name: dynamic_bootstrap
   hparams:
     num_classes: ${dataset.num_labels}
-    dice_weight: 0.5
     background_trust: 0.8
     min_positive_trust: 0.2
     bootstrap_start: 0.05
