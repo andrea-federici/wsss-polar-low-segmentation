@@ -119,18 +119,19 @@ class DynamicBootstrappedDiceCELoss(torch.nn.Module):
                     "class_trust must have length equal to num_classes"
                 )
         else:
-            if num_classes == 1:
-                trust = torch.tensor([1.0], dtype=torch.float32)
-            else:
-                positive = torch.linspace(
-                    min_positive_trust,
-                    1.0,
-                    steps=num_classes - 1,
-                    dtype=torch.float32,
-                )
-                background = torch.tensor([background_trust], dtype=torch.float32)
-                trust = torch.cat((background, positive))
+            positive = torch.linspace(
+                min_positive_trust,
+                1.0,
+                steps=num_classes - 1,
+                dtype=torch.float32,
+            )
+            background = torch.tensor([background_trust], dtype=torch.float32)
+            trust = torch.cat((background, positive))
+        if torch.any((trust < 0) | (trust > 1)):
+            mn, mx = trust.min().item(), trust.max().item()
+            raise ValueError(f"class_trust entries must be in [0,1]; got min={mn:.3f}, max={mx:.3f}")
         trust = trust.clamp(0.0, 1.0)
+        print(f"Dynamic boostrapping class trust: {trust.tolist()}")
         self.register_buffer("class_trust", trust)
 
         self.bootstrap_start = float(bootstrap_start)

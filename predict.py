@@ -115,7 +115,7 @@ def run(cfg: DictConfig) -> None:
     only_metrics = True
     save_only_pos = True
     binarize_masks = True
-    top_classes = -1  # Use -1 to skip this step
+    top_classes = 4 # Use -1 to skip this step
     use_crf = False
 
     if cfg.get("predict") is not None:

@@ -2,8 +2,8 @@ defaults:
   - base
 
 name: polar-lows
-image_dir: data/pl/images_balanced
-mask_dir: data/pl/masks_it6
-num_labels: 8
+image_dir: data/pl/images/train
+mask_dir: data/pl/masks_gradcam
+num_labels: 2
 width: 512
 height: 512

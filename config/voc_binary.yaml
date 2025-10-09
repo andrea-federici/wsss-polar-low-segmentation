@@ -17,4 +17,5 @@ run_tags: ['voc']
 
 predict:
   gt_folder: data/voc_binary/gt_masks
+  test_image_dir: data/voc_binary/test_images
   allow_mask_skip: True

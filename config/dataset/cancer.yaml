@@ -3,8 +3,8 @@ defaults:
 
 name: cancer
 image_dir: data/bus/images
-mask_dir: data/bus/gradcam_masks
-num_labels: 2
+mask_dir: data/bus/masks_std_aer_it3
+num_labels: 5
 width: 512
 height: 512
 # class_weight: [0.1, 0.3, 0.7, 0.9, 1.0]
