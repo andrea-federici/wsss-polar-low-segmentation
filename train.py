@@ -11,6 +11,7 @@ from omegaconf import DictConfig, OmegaConf
 from src.models.utils import model_getter
 from src.utils.misc import find_devices, reduce_precision, register_resolvers
 from src.utils.seg_losses import loss_getter
+from src.utils.seed import configure_seed
 
 sys.path.append("../")
 import neptune
@@ -36,6 +37,9 @@ def run(cfg: DictConfig) -> float:
         "set num_labels=2."
     )
 
+    seed = cfg.get("seed")
+    configure_seed(seed)
+
     aug_list = get_aug_list(AugParams(**cfg.dataset.aug_params)) if cfg.dataset.augment else None
     data_module = SegDataModule(
         image_dir=cfg.dataset.image_dir,
@@ -46,6 +50,7 @@ def run(cfg: DictConfig) -> float:
         augment=cfg.dataset.augment,
         aug_list=aug_list,
         num_workers=cfg.workers,
+        seed=seed,
     )
 
     # Model
