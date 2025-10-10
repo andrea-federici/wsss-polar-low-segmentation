@@ -26,6 +26,7 @@ from src.models.utils import handle_outputs, model_getter
 from src.utils.crf_utils import refine_mask_with_crf
 from src.utils.io import find_by_basename, read_image, read_mask
 from src.utils.misc import reduce_precision, register_resolvers
+from src.utils.seed import configure_seed, make_worker_init_fn
 from src.utils.seg_losses import loss_getter
 
 register_resolvers()
@@ -93,6 +94,14 @@ def _get_test_dataloader(cfg: DictConfig):
         width=cfg.dataset.width,
         transform=wrapped,
     )
+    seed = cfg.get("seed")
+    generator = None
+    worker_init_fn = None
+    if seed is not None:
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+        worker_init_fn = make_worker_init_fn(seed)
+
     return DataLoader(
         ds,
         batch_size=cfg.batch_size,
@@ -100,6 +109,8 @@ def _get_test_dataloader(cfg: DictConfig):
         num_workers=cfg.workers,
         collate_fn=lambda batch: (default_collate([b[0] for b in batch]),
                                   [b[1] for b in batch]),
+        worker_init_fn=worker_init_fn,
+        generator=generator,
     )
 
 @hydra.main(version_base=None, config_path="config", config_name="pl_config")
@@ -109,6 +120,8 @@ def run(cfg: DictConfig) -> None:
         "num_labels must be at least 2 in order for softmax to work. If you have binary masks, "
         "set num_labels=2."
     )
+
+    configure_seed(cfg.get("seed"))
 
     stage = "test"
     do_augment = False
@@ -544,6 +557,7 @@ def _get_dataloader(cfg: DictConfig, stage: str, do_augment: Optional[bool] = No
         augment=cfg.dataset.augment if do_augment is None else do_augment,
         aug_list=aug_list,
         num_workers=cfg.workers,
+        seed=cfg.get("seed"),
     )
     data_module.prepare_data()
     data_module.setup(stage=stage)

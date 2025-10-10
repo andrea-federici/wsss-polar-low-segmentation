@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
 import albumentations as A
 import cv2
@@ -13,6 +13,7 @@ from torch.utils.data._utils.collate import default_collate
 
 from src.data.augmentation import TransformFn, alb_transform_wrapper
 from src.utils.io import ensure_exists, find_by_basename, read_image, read_mask
+from src.utils.seed import make_worker_init_fn
 
 
 class SegmentationDataset(Dataset):
@@ -106,7 +107,7 @@ class SegDataModule(pl.LightningDataModule):
         aug_list: Optional[List[A.BasicTransform | A.BaseCompose]] = None,
         batch_size: int = 8,
         num_workers: int = 2,
-        seed: int = 42,
+        seed: Optional[int] = None,
     ):
         super().__init__()
         self.image_dir = image_dir
@@ -119,11 +120,21 @@ class SegDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.seed = seed
+        self._generator: Optional[torch.Generator] = None
+        self._worker_init_fn: Optional[Callable[[int], None]] = None
 
         self._train_dataset: Optional[Subset] = None
         self._val_dataset: Optional[Subset] = None
 
     def setup(self, stage: str | None = None) -> None:
+        if self.seed is not None:
+            self._generator = torch.Generator()
+            self._generator.manual_seed(self.seed)
+            self._worker_init_fn = make_worker_init_fn(self.seed)
+        else:
+            self._generator = None
+            self._worker_init_fn = None
+
         base_ops = [A.Resize(self.height, self.width), ToTensorV2()]
 
         if self.augment:
@@ -160,6 +171,8 @@ class SegDataModule(pl.LightningDataModule):
             shuffle=True,
             num_workers=self.num_workers,
             collate_fn=_collate_with_names,
+            worker_init_fn=self._worker_init_fn,
+            generator=self._generator,
         )
 
     def val_dataloader(self) -> DataLoader:
@@ -171,6 +184,8 @@ class SegDataModule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=_collate_with_names,
+            worker_init_fn=self._worker_init_fn,
+            generator=self._generator,
         )
 
     def test_dataloader(self):
