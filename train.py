@@ -10,8 +10,8 @@ from omegaconf import DictConfig, OmegaConf
 
 from src.models.utils import model_getter
 from src.utils.misc import find_devices, reduce_precision, register_resolvers
-from src.utils.seg_losses import loss_getter
 from src.utils.seed import configure_seed
+from src.utils.seg_losses import loss_getter
 
 sys.path.append("../")
 import neptune
@@ -114,8 +114,8 @@ def run(cfg: DictConfig) -> float:
     if cfg.checkpoints:
         checkpoint_callback = ModelCheckpoint(
             save_top_k=1,
-            monitor="val_loss",
-            mode="min",
+            monitor=monitor,
+            mode=mode,
             dirpath=cfg.logger.logdir + "/checkpoints/",
             filename=model.nametag + "___{epoch:03d}-{val_f1:e}",
         )
@@ -132,6 +132,7 @@ def run(cfg: DictConfig) -> float:
         gradient_clip_val=cfg.clip_val,
         accelerator="gpu",
         overfit_batches=0.0,  # >0 for debug
+        deterministic="warn",
     )
     trainer.fit(seg, datamodule=data_module)
 

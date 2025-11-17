@@ -3,7 +3,7 @@ defaults:
   - override dataset: cancer
   - override model: segformer
   - override lr_scheduler: redplat
-  - override loss: dice_ce #
+  - override loss: dynamic_bootstrap #
 
 logger:
   use_env_token: True

@@ -3,10 +3,10 @@ defaults:
 
 name: voc_binary
 image_dir: data/voc_binary/images
-mask_dir: data/voc_binary/masks_std_aer_it6
-num_labels: 2
-width: 299
-height: 299
+mask_dir: data/voc_binary/masks_core_seed42_it6/non_vis
+num_labels: 8
+width: 480
+height: 480
 
 aug_params:
   vflip_p: 0.0

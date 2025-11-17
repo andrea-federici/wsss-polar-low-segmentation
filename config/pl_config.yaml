@@ -3,7 +3,7 @@ defaults:
   - override dataset: polar_lows
   - override model: segformer
   - override lr_scheduler: redplat
-  - override loss: dice_ce
+  - override loss: dynamic_bootstrap
 
 logger:
   use_env_token: True
@@ -12,3 +12,6 @@ logger:
 checkpoints: True
 
 run_tags: ['pl']
+
+predict:
+  test_image_dir: data/pl/images/test/pos

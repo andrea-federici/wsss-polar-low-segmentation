@@ -131,7 +131,7 @@ class DynamicBootstrappedDiceCELoss(torch.nn.Module):
             mn, mx = trust.min().item(), trust.max().item()
             raise ValueError(f"class_trust entries must be in [0,1]; got min={mn:.3f}, max={mx:.3f}")
         trust = trust.clamp(0.0, 1.0)
-        print(f"Dynamic boostrapping class trust: {trust.tolist()}")
+        print(f"Dynamic bootstrapping class trust: {trust.tolist()}")
         self.register_buffer("class_trust", trust)
 
         self.bootstrap_start = float(bootstrap_start)
@@ -151,14 +151,17 @@ class DynamicBootstrappedDiceCELoss(torch.nn.Module):
         self.progress = float(max(0.0, min(1.0, progress)))
 
     def _current_bootstrap_factor(self) -> float:
+        # Degenerate case
         if self.bootstrap_end <= self.bootstrap_start:
             return self.bootstrap_final_factor
 
+        # Set bootstrap factor if before start or after end
         if self.progress <= self.bootstrap_start:
             return self.bootstrap_initial_factor
         if self.progress >= self.bootstrap_end:
             return self.bootstrap_final_factor
 
+        # Set bootstrap factor in between start and end
         span = self.bootstrap_end - self.bootstrap_start
         relative = (self.progress - self.bootstrap_start) / span
         relative = relative ** self.schedule_power
@@ -196,9 +199,9 @@ class DynamicBootstrappedDiceCELoss(torch.nn.Module):
         lambda_map = lambda_map.clamp(0.0, 1.0)
         lambda_map = lambda_map.unsqueeze(1)
 
-        probs = probs.detach()
+        probs_for_mix = probs.detach()
 
-        mixed_target = (1.0 - lambda_map) * one_hot.to(device=logits.device) + lambda_map * probs
+        mixed_target = (1.0 - lambda_map) * one_hot.to(device=logits.device) + lambda_map * probs_for_mix
 
         ce_loss = -(mixed_target * log_probs).sum(dim=1).mean()
 
