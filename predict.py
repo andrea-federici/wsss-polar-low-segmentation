@@ -116,12 +116,12 @@ def run(cfg: DictConfig) -> None:
 
     configure_seed(cfg.get("seed"), deterministic=False)
 
-    stage = "val"
+    stage = "test"
     do_augment = False
-    only_metrics = False
+    only_metrics = True
     save_only_pos = True
-    binarize_masks = False
-    top_classes = -1
+    binarize_masks = True
+    top_classes = 6
     use_crf = False
 
     if cfg.get("predict") is not None:
@@ -304,16 +304,31 @@ def run(cfg: DictConfig) -> None:
                         overlay_pred = np.clip(0.6 * img + 0.4 * pred_colored_original, 0.0, 1.0)
 
                     if gt_mask is not None:
-                        # Create a yellow overlay for ground truth (RGB: 1.0, 1.0, 0.0)
-                        target_colored = np.zeros((gt_mask.shape[0], gt_mask.shape[1], 3), dtype=np.float32)
-                        target_colored[:, :, 0] = 1.0  # Red channel
-                        target_colored[:, :, 1] = 1.0  # Green channel
-                        target_colored[:, :, 2] = 0.0  # Blue channel (already 0)
+                        if cfg.dataset.name == "polar_lows":
+                            # Multi-class visualization for Polar Lows
+                            num_colors = cfg.dataset.num_labels
+                            cmap = plt.get_cmap("viridis", num_colors)
+                            
+                            # Map integer mask to RGB colors
+                            target_colored = cmap(gt_mask / float(num_colors))[:, :, :3]
+                            
+                            # Restore background pixels
+                            background_mask_target = gt_mask == 0
+                            target_colored[background_mask_target] = img[background_mask_target]
+                            
+                            overlay_target = np.clip(0.6 * img + 0.4 * target_colored, 0.0, 1.0)
                         
-                        # Keep original image for background pixels
-                        background_mask_target = gt_mask == 0
-                        target_colored[background_mask_target] = img[background_mask_target]
-                        overlay_target = np.clip(0.6 * img + 0.4 * target_colored, 0.0, 1.0)
+                        else:
+                            # Original logic (Binary Yellow) for all other datasets
+                            target_colored = np.zeros((gt_mask.shape[0], gt_mask.shape[1], 3), dtype=np.float32)
+                            target_colored[:, :, 0] = 1.0  # Red channel
+                            target_colored[:, :, 1] = 1.0  # Green channel
+                            target_colored[:, :, 2] = 0.0  # Blue channel (Yellow result)
+                            
+                            # Keep original image for background pixels
+                            background_mask_target = gt_mask == 0
+                            target_colored[background_mask_target] = img[background_mask_target]
+                            overlay_target = np.clip(0.6 * img + 0.4 * target_colored, 0.0, 1.0)
 
                     overlay_crf = None
                     if use_crf:
