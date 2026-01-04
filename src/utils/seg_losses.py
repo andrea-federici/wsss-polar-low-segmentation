@@ -209,8 +209,8 @@ class DynamicBootstrappedDiceCELoss(torch.nn.Module):
         if self.dice_weight > 0:
             dims = (0,) + tuple(range(2, logits.dim()))
             probs_flat = probs
-            # one_hot_flat = one_hot.to(device=logits.device)
-            one_hot_flat = mixed_target
+            one_hot_flat = one_hot.to(device=logits.device)
+            # one_hot_flat = mixed_target
             intersection = torch.sum(probs_flat * one_hot_flat, dim=dims)
             denominator = torch.sum(probs_flat + one_hot_flat, dim=dims)
             dice_per_class = 1.0 - (2.0 * intersection + self.smooth) / (denominator + self.smooth)
