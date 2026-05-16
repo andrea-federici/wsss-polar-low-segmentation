@@ -1,10 +1,10 @@
-# Polar Low Segmentation from Weak Pseudo-Labels
+# 🌊 Polar Low Segmentation from Weak Pseudo-Labels
 
 Stage 2 of the weakly supervised polar low segmentation project. This repository trains semantic segmentation networks on pseudo-label masks produced by the companion pseudo-label generation pipeline.
 
 The project is built around Hydra configuration, PyTorch Lightning training, and interchangeable segmentation backbones such as SegFormer, UPerNet, DPT, UNetFormer, and `segmentation_models.pytorch` models.
 
-## Project Role
+## 🧭 Project Role
 
 The full thesis pipeline has two parts:
 
@@ -18,7 +18,7 @@ image-level labels
 
 This repository is the second part. It does not generate pseudo-labels itself; it consumes image/mask pairs and trains a segmentation model to predict polar low regions directly.
 
-## Highlights
+## ✨ Highlights
 
 | Capability | Implementation |
 | --- | --- |
@@ -31,7 +31,7 @@ This repository is the second part. It does not generate pseudo-labels itself; i
 | Logging | Neptune or TensorBoard |
 | Datasets | Polar lows, breast ultrasound, VOC binary person |
 
-## Repository Layout
+## 🗂️ Repository Layout
 
 ```text
 .
@@ -60,7 +60,7 @@ This repository is the second part. It does not generate pseudo-labels itself; i
     `-- test_loss.py                 # Dynamic bootstrap loss smoke test
 ```
 
-## Data Layout
+## 🧊 Data Layout
 
 The segmentation dataloader matches images and masks by filename stem. For example, `sample_001.png` in the image directory must have a corresponding `sample_001.png`, `.jpg`, or `.jpeg` in the mask directory.
 
@@ -86,7 +86,7 @@ Configured dataset paths:
 
 For multiclass ordinal pseudo-labels, `dataset.num_labels` should equal the number of valid label values, including background. The base config notes that if pseudo-label generation stopped at iteration `n`, this is typically `n + 2`: background `0`, plus foreground confidence classes `1..n+1`.
 
-## Installation
+## ⚙️ Installation
 
 Create the Conda environment:
 
@@ -109,7 +109,7 @@ To use TensorBoard instead:
 python train.py --config-name pl_config logger=tb
 ```
 
-## Training
+## 🚀 Training
 
 Train the main polar low SegFormer experiment:
 
@@ -154,7 +154,7 @@ python train.py --config-name pl_config \
 
 The helper script `seg_launcher.sh` shows the same idea for VOC masks across several pseudo-label iterations.
 
-## Prediction and Evaluation
+## 🔎 Prediction and Evaluation
 
 Run inference from a checkpoint:
 
@@ -182,7 +182,7 @@ out/
 `-- masks/                    # Raw predicted masks
 ```
 
-## Models
+## 🧠 Models
 
 Model selection is controlled by the `model` Hydra group.
 
@@ -197,7 +197,7 @@ Model selection is controlled by the `model` Hydra group.
 
 See `src/models/models.md` for the original model notes and references.
 
-## Losses
+## 📉 Losses
 
 Losses are selected through `config/loss/`.
 
@@ -218,7 +218,7 @@ Key controls:
 | `loss.hparams.bootstrap_end` | Training progress where full bootstrapping is reached |
 | `loss.hparams.bootstrap_final_factor` | Maximum target/prediction mixing strength |
 
-## Logging and Outputs
+## 📦 Logging and Outputs
 
 Hydra writes each run into:
 
@@ -234,14 +234,14 @@ logs/.../checkpoints/
 
 The monitored metric defaults to `val_f1` with `mode=max`.
 
-## Configuration Notes
+## 🛠️ Configuration Notes
 
 - `config/default.yaml` defaults to `dataset: voc`, but there is no `config/dataset/voc.yaml` in the repository. Use explicit experiment configs such as `pl_config`, `voc_binary`, or `cancer_config`.
 - The current `config/dataset/polar_lows.yaml` in this working tree sets `num_labels: 1`, while `train.py` asserts `dataset.num_labels >= 2`. For binary masks, set `dataset.num_labels=2`; for ordinal masks from iteration `n`, set `dataset.num_labels=n+2`.
 - `train.py` and `predict.py` import `src.data.augmentation`, but that file is not present in the current repository tree. Restore it or add an equivalent module before running training.
 - The trainer is configured with `accelerator="gpu"`. On CPU-only machines, change the trainer accelerator or run on a CUDA-enabled environment.
 
-## Typical Polar Low Workflow
+## 🔁 Typical Polar Low Workflow
 
 1. Generate pseudo-labels in `../wsss-polar-low-pseudolabels`.
 2. Copy or symlink the final `non_vis` mask directory into `data/pl/`.
@@ -259,7 +259,7 @@ python train.py --config-name pl_config \
   loss=dynamic_bootstrap
 ```
 
-## Testing
+## ✅ Testing
 
 Run the available loss test:
 
